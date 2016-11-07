@@ -1,0 +1,818 @@
+---
+title: "verbose.R"
+date: "October 14, 2016"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo=TRUE)
+```
+
+This is code for mortality analysis on the NHANES data. First load all library dependencies.
+
+```{r}
+library(survival)   # required for coxph function
+library(survey)     # required for stratified analysis
+library(polycor)    # ???
+library(Hmisc)      # ???
+library(venneuler)  # venn diagrams 
+library(UpSetR)     # specific plot
+```
+
+In the `nhanes_schema_merged_all_031816.Rdata` file you can load with the Dropbox or custom path. `bigData` and `tabDesc` in the new NHANES data maps with `MainTable` and `VarDescription` from the Scientific Data paper. I remapped this data so you could comment out this section and for the most part still run the code as-is if you wanted to use the package version or prior data.
+
+```{r}
+#load('~/Dropbox (RagGroup)/RagGroup Team Folder/nhanes_merged_data/nhanes_schema_merged_all_031816.Rdata')
+#load('~/src/xwas/survival/nhanes_schema_merged_all_031816.Rdata')
+load('~/Dropbox/NHANES/nhanes_schema_merged_all_031816.Rdata')
+
+MainTable <- bigData
+VarDescription <- tabDesc
+## create a new 'area' variable that is a combination of the SDMVPSU and SDMVSTRA
+MainTable$area <- paste(MainTable$SDMVPSU, MainTable$SDMVSTRA, sep='_')
+
+rm(bigData)
+rm(tabDesc)
+```
+
+What shall we use as predictors of death? Central question includes what phenotypes and diagnostic markers are associated with survival in the US population. This is important as these markers are used in the clinic for diagnosis of disease.
+
+There are 66 EWAS categories or unique `VarDescription$var_desc_ewas`. We subset and use ~13 of them defined in `useTheseCategories` to be associated with death. We subset the data for the cohorts defined by the years in `useTheseSeries`.
+
+```{r}
+length( names(table(VarDescription$var_desc_ewas)) ) # 66 unique
+
+useTheseCategories <- c('autoantibody', 'biochemistry', 'blood', 'blood pressure', 'body measures', 'cognitive functioning', 'cotinine', 'dermatology', 'hormone', 'physical fitness', 'physical functioning', 'sleep', 'spirometry') # variables we will associate with death
+useTheseSeries <- c('1999-2000', '2001-2002', '2003-2004', '2005-2006', '2007-2008', '2009-2010', '2011-2012') # patient cohort series we're using
+
+VarDescription.2 <- VarDescription[VarDescription$var_desc_ewas %in% useTheseCategories & VarDescription$series %in% useTheseSeries, ]
+```
+
+Do a quick table to see the variable distribution, there are about 1574 unique ones. We subset the list based on prefix using what's defined in `beginWith` and store that in `VarDescription.3`. This brings down the list of variables to about 457.
+
+```{r}
+head( table(VarDescription.2$var, VarDescription.2$series) ) # Variables by cohort year,
+dim( dim(VarDescription.2$var, VarDescription.2$series) )    # 1,574 unique variables.
+
+beginWith <- c('LBX', 'LBD', 'URX', 'URD', 'DXX', 'MGX', 'MSD', 'MSX', 'SPX', 'DEX', 'MSYS', 'MDIS', 'BIX', 'BAX', 'CVD', 'BPX', 'BMX') 
+VarDescription.2$first3 <- substr(VarDescription.2$var, 1, 3)
+VarDescription.2$first4 <- substr(VarDescription.2$var, 1, 4)
+VarDescription.3 <- VarDescription.2[VarDescription.2$first3 %in% beginWith |
+                                     VarDescription.2$first4 %in% beginWith, ]
+
+head( table(VarDescription.3$var, VarDescription.3$series) ) # Variables by cohort year,
+dim( table(VarDescription.3$var, VarDescription.3$series) )  # 457 unique variables.
+```
+
+Choose variables that are present >= 3 surveys. Since some variables appear more than once in a given survey year we map the counts > 1 to just 1 to indicate presence then sum across the rows to find unique counts across survey years. The counts >= 3 are the variables of interest and we display the original table subsetted as a sanity check. Our final list of variables present in >= 3 surveys is 336.
+
+```{r}
+VarDescription.3.table <- table(VarDescription.3$var, VarDescription.3$series)
+map <- t( apply(VarDescription.3.table, 1, function(x) {ifelse(x >= 1, 1, 0)}) )
+FinalVariableList <- rownames(map)[apply(map, 1, sum) >= 3]
+rm(map) # cleanup to avoid confusion after use since variable name non-descriptive
+
+head( VarDescription.3.table[rownames(VarDescription.3.table) %in% FinalVariableList, ] ) # sanity check if wanted
+
+length(FinalVariableList) # final list of variables is 336
+```
+
+Some data points are duplicates (e.g., SI measurements). Find all the lab measures that end in SI suffix and store in `SIduplicates` as the search space. Find variables that exist in whole text plus again with SI appended to the end and log it in new list while removing from the `FinalVariableList`.
+
+```{r}
+SIduplicates <- FinalVariableList[grep("SI$", FinalVariableList)]
+length(SIduplicates) # 44 potential duplicates
+
+SIduplicates.removed <- c()
+
+for (i in SIduplicates) {
+  root <- substr(i, 1, nchar(i)-2) # variable w/o SI suffix
+  
+  if (root %in% FinalVariableList) { # check for duplicate non-SI measurement 
+    SIduplicates.removed <- c(SIduplicates.removed, i)
+    
+    #FinalVariableList <- FinalVariableList[FinalVariableList != i]
+  } else if (regexpr("^.{2}D.*", root) > 0) {
+    if (paste0(substr(root, 1, 2), "X", substr(root, 4, nchar(root))) %in% FinalVariableList) {
+      SIduplicates.removed <- c(SIduplicates.removed, i)
+    }
+  }
+}
+
+SIduplicates.removed # only 4 duplicated measurements reported as SI
+
+FinalVariableList <- FinalVariableList[!(FinalVariableList %in% SIduplicates.removed)] # remove the imposters
+
+length(FinalVariableList) # final variable list is now 309
+```
+
+Before we go further let's review our chosen variables.
+
+```{r}
+final.table <- subset(VarDescription, var %in% FinalVariableList)
+
+pie(table(final.table$series), main="Variables to Analyze by Survey Year")
+
+pie(sort(table(final.table$var_desc_ewas)), main="Variables to Analyze by Category")
+```
+
+With our final list of variables in hand we should revisit the `MainTable` that contained the patients to pare down the data to just include these final variable descriptors after we define covariates! Part 1: age, sex, race/ethnicity, age^2. Part 2: chronic disease (self report), ratio of family income to poverty ([INDFMPIR](https://wwwn.cdc.gov/Nchs/Nhanes/2011-2012/DEMO_G.htm#INDFMPIR)).
+
+```{r}
+MainTable$RIDAGEYR2 <- MainTable$RIDAGEYR^2
+adjustfor <- c('RIDAGEYR', 'RIDAGEYR2', 'RIAGENDR', 'INDFMPIR', 'RIDRETH1') # cleaned up to include just what we need
+variablesToKeep <- c('PERMTH_EXM', 'MORTSTAT', adjustfor, FinalVariableList, 'SDDSRVYR', 'SDMVPSU', 'SDMVSTRA', 'WTMEC2YR', 'WTMEC4YR', 'area')
+
+MainTable.2 <- MainTable[, colnames(MainTable) %in% variablesToKeep]
+```
+
+How many people actually have mortality in the data compared to our subset? Look at distribution of time to censorship or death (`PERMTH_EXM`) then subset the patient list to those for the survey year (`SDDSRVYR`) of before or equal to 6 or earlier than the 2009-2010 (excluding 2011-2012 and 2013-2014).
+
+```{r}
+table(MainTable.2$SDDSRVYR)
+MainTable.2 <- subset(MainTable.2, SDDSRVYR <= 6)
+table(MainTable.2$SDDSRVYR)
+
+table(MainTable$MORTSTAT, MainTable$SDDSRVYR)
+hist(MainTable$PERMTH_EXM, breaks=55, main="Time to Censorship or Death", xlab="Days", col="green")
+hist(MainTable.2$PERMTH_EXM, breaks=55, col="blue", add=T)
+```
+
+`PERMTH_EXM` doesn't change significantly after all the subsetting above, the distributions are almost identical visually and we confirm that quantitatively with a t.test below where p = 1.
+
+```{r}
+summary(MainTable$PERMTH_EXM)
+summary(MainTable.2$PERMTH_EXM)
+
+t.test(MainTable$PERMTH_EXM, MainTable.2$PERMTH_EXM)$p.value
+```
+
+Now let's make sure every variable is the correct data type.
+
+```{r}
+MainTable.2$RIAGENDR <- factor(MainTable.2$RIAGENDR, levels=c(1:2), labels=c('m', 'f')) # Gender
+MainTable.2$RIDRETH1 <- factor(MainTable.2$RIDRETH1) # Multiple ethnicities
+MainTable.2$SDDSRVYR <- factor(MainTable.2$SDDSRVYR, levels=c(1:6), labels=c("1999-2000", "2001-2002", "2003-2004", "2005-2006", "2007-2008", "2009-2010")) # Survey year
+MainTable.2$SDMVPSU  <- factor(MainTable.2$SDMVPSU) # Primary Sampling Unit
+MainTable.2$SDMVSTRA <- factor(MainTable.2$SDMVSTRA) # Sample strata
+MainTable.2$area <- factor(MainTable.2$area) # Sample AREA
+
+# Let's use the VarDescription table to help "systematically" factor variables
+VarDescription.3$module <- tolower(VarDescription.3$module) # hack for inconsistencies in capitalization
+
+# Examination variables with defined categories should be cast as factors
+ManualCategoricalVariables <- subset(VarDescription.3, !is.na(categorical_levels))
+
+# Manually verify, identify the class and then number of levels to confirm (quantitative variables have more)
+unlist(lapply(MainTable.2[, colnames(MainTable.2) %in% ManualCategoricalVariables$var], class ))
+unlist(lapply(MainTable.2[, colnames(MainTable.2) %in% ManualCategoricalVariables$var], function(x) {length(table(x))} ))
+
+# only LBDTT3SI seems to be a concern, factor everything else
+table(MainTable.2$LBDTT3SI)
+ManualCategoricalVariables <- subset(ManualCategoricalVariables, var != "LBDTT3SI")
+ManualCategoricalVariablesIndex <- which(colnames(MainTable.2) %in% ManualCategoricalVariables$var)
+
+for (i in ManualCategoricalVariablesIndex) {
+  MainTable.2[, i] <- factor(MainTable.2[, i])
+}
+
+# look at the rest
+MainTable.2.classes <- unlist(lapply(MainTable.2, class))
+MainTable.2.factor  <- names(MainTable.2.classes[MainTable.2.classes == "character"])
+MainTable.2.integer <- names(MainTable.2.classes[MainTable.2.classes == "integer"])
+MainTable.2.numeric <- names(MainTable.2.classes[MainTable.2.classes == "numeric"])
+
+# characters are really factors
+apply(MainTable.2[, MainTable.2.factor], 2, table)
+
+sort(apply(MainTable.2[, MainTable.2.integer], 2, function(x) { length(table(x)) }))
+
+for (i in MainTable.2.factor) {
+  MainTable.2[, i] <- factor(MainTable.2[, i])
+}
+```
+
+Do a scale and log transform of all quantitative variables.
+
+```{r}
+transform.cols <- which(colnames(MainTable.2) %in% FinalVariableList) # all potential variables
+transform.cols <- setdiff(transform.cols, ManualCategoricalVariablesIndex) # remove all categorical variables
+transform.cols <- setdiff(transform.cols, which(colnames(MainTable.2) %in% MainTable.2.factor)) # remove all other factors
+transform.cols <- setdiff(transform.cols, which(colnames(MainTable.2) %in% MainTable.2.integer)) # remove all integers, may not be necessary
+
+MainTable.cleaned <- cbind(MainTable.2[, !colnames(MainTable.2) %in% colnames(MainTable.2)[transform.cols]], apply(MainTable.2[, transform.cols], 2, function(x) { scale(log(x+1e-10)) })) # log transform the data
+```
+
+Some heatmap action for correlation of the quantitative variables...this is time-intenseive, don't always run so set to `eval=FALSE` by default.
+
+```{r eval=FALSE}
+sort(table(unlist(lapply(MainTable.cleaned[FinalVariableList], class))), decreasing=T)
+#final.numerics <- names(which(unlist(lapply(MainTable.cleaned[FinalVariableList], is.numeric)) == TRUE))
+final.numeric.names <- colnames(MainTable.2)[transform.cols]
+
+FinalVariableList.heat.raw <- matrix(NA, nrow=length(transform.cols), ncol=length(transform.cols), dimnames=list(final.numeric.names, final.numeric.names))
+FinalVariableList.heat.log <- matrix(NA, nrow=length(transform.cols), ncol=length(transform.cols), dimnames=list(final.numeric.names, final.numeric.names))
+
+for (i in 1:length(final.numeric.names)) {
+  for (j in i:length(final.numeric.names)) {
+    FinalVariableList.heat.raw[i, j] <- cor(na.omit(MainTable.2[final.numeric.names[i]]), na.omit(MainTable.2[final.numeric.names[j]]), use="everything", method="spearman")
+    
+    FinalVariableList.heat.log[i, j] <- cor(MainTable.cleaned[final.numeric.names[i]], MainTable.cleaned[final.numeric.names[j]], use="complete", method="spearman")
+  }
+  
+  print(i)
+}
+```
+
+Sample analysis below.
+
+```{r eval=FALSE}
+## first, let us focus on each survey one at a time in males and females
+glucose.m.1999 <- svycoxph(Surv(PERMTH_EXM, MORTSTAT) ~ I(scale(log(LBXGLU))) + RIDAGEYR + RIDAGEYR2 + factor(RIDRETH1, levels=c(3, 1, 2, 4, 5)), subset(dsn, RIAGENDR == 1 & SDDSRVYR == 1))
+glucose.f.1999 <- svycoxph(Surv(PERMTH_EXM, MORTSTAT) ~ I(scale(log(LBXGLU))) + RIDAGEYR + RIDAGEYR2 + factor(RIDRETH1, levels=c(3, 1, 2, 4, 5)), subset(dsn, RIAGENDR == 2 & SDDSRVYR == 1))
+
+summary(glucose.m.1999) ## HR of 1.2!: 20% increased risk for death
+summary(glucose.f.1999) ## HR of 1.25: 25% increased risk for death, pretty close to males
+
+reduced.mod <- coxph(Surv(PERMTH_EXM, MORTSTAT) ~ RIDAGEYR + male + black + mexican + other_hispanic + other_eth + cluster(area), dat, weights=dat$weight)
+```
+
+ALL THE DATA IS CLEANED, TIME TO XWAS!
+
+Some demographic analysis.
+
+```{r}
+table(MainTable.cleaned$SDDSRVYR) # individuals by cohort year
+
+sum(table(MainTable.cleaned$SDDSRVYR)) # total individuals over all years
+
+# average age and standard deviation by cohort year
+for (year in names(table(MainTable.cleaned$SDDSRVYR))) {
+  cat(
+    paste0(year, "\t",
+           round(mean(subset(MainTable.cleaned, SDDSRVYR == year)$RIDAGEYR), digits=1), " ", 
+           "(", round(sd(subset(MainTable.cleaned, SDDSRVYR == year)$RIDAGEYR), digits=1), ")"
+           ), 
+    "\n")
+}
+
+# ethnicity by year, needs work to clarify!!!
+for (year in names(table(MainTable.cleaned$SDDSRVYR))) {
+  cat(
+    paste0(year, "\t",
+           round(table(subset(MainTable.cleaned, SDDSRVYR == year)$RIDRETH1), digits=1), " ", 
+           "(", round(prop.table(table(subset(MainTable.cleaned, SDDSRVYR == year)$RIDRETH1))*100, digits=2), ")"
+           ), 
+    "\n")
+}
+```
+
+First define some supporting functions.
+
+```{r}
+# adds a list of co-variates to your model formula
+addToBase <- function(base_formula, adjustingVariables) {
+  for (var in adjustingVariables) {
+    base_formula <- update.formula( base_formula, as.formula(sprintf('~ . + %s', var)) )
+  }
+  
+  return(base_formula)
+}
+
+# convert xwas return list object to a data.frame with only beta and p-values for each co-variate
+xwas2df <- function(surv) {
+  #tmp <- lapply(surv, function(x) { return(x[1, c("exp(coef)", "Pr(>|z|)")]) } ) 
+  tmp <- lapply(surv, function(x) { return(x[1, c("coef","exp(coef)", "robust se", "Pr(>|z|)")]) } ) 
+  tmp <- data.frame(matrix(unlist(tmp), nrow=length(tmp), byrow=T))
+  colnames(tmp) <- c("beta", "HR", "se", "p")
+  rownames(tmp) <- names(surv)
+  tmp <- cbind(tmp, q=p.adjust(tmp$p, method='fdr'))
+  return(tmp)
+}
+
+# main workhorse function
+xwas <- function(design=NULL, timevar="PERMTH_EXM", depvar="MORTSTAT", adjfor=NULL) {
+  dsn <- design
+  total <- nrow(dsn$variables)
+  
+  surv <- list()
+  
+  for (varname in FinalVariableList) { # probably need to parameterize FinalVariableList
+    #cat(varname, " ") # debug
+    #baseformula <- as.formula(sprintf('Surv(%s, %s) ~ I(%s)', timevar, depvar, varname))
+    baseformula <- as.formula(sprintf('Surv(%s, %s) ~ I(%s) + cluster(area)', timevar, depvar, varname)) ## changes this to call coxph with robust errors
+    baseformula <- addToBase(baseformula, adjfor) # demo variables to adjust for
+    #print(baseformula) # debug
+    
+    n <- sum( xtabs(~eval(as.symbol(depvar)) + eval(as.symbol(varname)), data=dsn$variables) )
+    
+    #cat(prop.table(apply(xtabs(~eval(as.symbol(depvar)) + eval(as.symbol(varname)), data=dsn$variables), 1, sum)), " ") # debug
+    
+    if (n/total > 0.01) {
+      tryCatch( 
+        #surv[[varname]] <- svycoxph(baseformula, dsn), ## this does svycoxph, which is the same as coxph (with cluster and weights)
+        surv[[varname]] <- coxph(baseformula, data=dsn$variables, weights=1/dsn$allprob[, 1])  # changed to coxph
+        
+        ,
+        
+        error=function(e) { 
+          #message(e)
+          message(sprintf("some weird error?!: %s, %s", varname, paste(adjfor, collapse=';')))
+        }
+        #, 
+        #warning=function(w) {
+        #  message(w)
+        #  message(sprintf("%s,%s", varname, paste(adjfor, collapse=';')))
+       #}
+        
+      )
+    } else {
+      cat(sprintf("skipping %s, total cases < 1%% of all data", varname), "\n")
+    }
+    
+    #cat("\n")
+  }
+  
+  return(surv)
+}
+
+# takes return list object from xwas function and annotates co-variates with more verbose descriptions
+annotate <- function(dat) {
+  labels <- subset(VarDescription, var_desc_ewas %in% useTheseCategories)[, c("var", "var_desc", "var_desc_ewas")]
+  labels <- labels[!duplicated(labels$var), ]
+  rownames(labels) <- labels$var
+
+  # match variables from the xwas output to the labels object
+  dat <- merge(dat, labels, all.x=TRUE, by="row.names")
+  rownames(dat) <- dat$Row.names
+  dat$Row.names <- NULL
+  
+  return(dat)
+}
+
+cindexformodel <- function(mod, dat) {
+	xx <- predict(mod)
+	ss <- mod$y
+	cStruct <- rcorr.cens(xx,ss)
+	cStruct[1] <- (-cStruct[2]/2) + .5
+	
+	return(cStruct)
+}
+
+weightedr2 <- function(mod, useweight=T) {
+	## unweighted method is in agreement with Harrell's implementation in ?validate (library Hmisc)
+	## this is the same
+	l0 <- mod$loglik[1]
+	lr <- -2*(mod$loglik[1] - mod$loglik[2])
+	n <- mod$n
+	if (useweight) {
+		n <- sum(mod$weights)
+	}
+	r2 <- (1-exp(-lr/n)) / (1-exp(2*l0/n))
+	
+	return(r2)
+}
+
+```
+
+Show that demographic variables captured in `adjustfor` are significant.
+
+```{r}
+for (i in adjustfor) { 
+  print( 
+    svycoxph(
+      as.formula(sprintf('Surv(%s, %s) ~ I(%s)', "PERMTH_EXM", "MORTSTAT", i)), 
+      svydesign(ids=~SDMVPSU, strata=~SDMVSTRA, weights=~WTMEC2YR, data=subset(MainTable.cleaned, WTMEC2YR > 0), nest=TRUE)
+    ) 
+  ) 
+}
+```
+
+Run an alternative modeling method using a robust Cox PH model
+
+```{r}
+MainTable.cleaned.use <- subset(MainTable.cleaned, WTMEC2YR > 0)
+for (i in adjustfor) { 
+  print( 
+    coxph(
+      as.formula(sprintf('Surv(%s, %s) ~ I(%s) + cluster(area)', "PERMTH_EXM", "MORTSTAT", i)), 
+      weights=MainTable.cleaned.use$WTMEC2YR,
+      data = MainTable.cleaned.use
+    ) 
+  ) 
+}
+```
+
+Now do survival analysis for all patients then subsetted by gender.
+
+```{r}
+# all analysis
+dsn.all <- svydesign(ids=~SDMVPSU, strata=~SDMVSTRA, weights=~WTMEC2YR, data=subset(MainTable.cleaned, WTMEC2YR > 0), nest=TRUE)
+surv.all.raw <- xwas(design=dsn.all, adjfor=adjustfor) # list of svycoxph 
+surv.all.coef <- lapply(surv.all.raw, function(x) { coef(summary(x)) }) # list of df
+surv.all.r2 <- lapply(surv.all.raw, function(x) { weightedr2(x) }) # list of df
+surv.all <- xwas2df(surv.all.coef) # df with beta, p, and q-values
+surv.all <- annotate(surv.all) # annotate with verbose descriptors
+surv.all.sig <- subset(surv.all, q < 0.05) # only FDR significant variables
+surv.all.sig <- surv.all.sig[order(surv.all.sig$beta), ] # sort by effect size
+
+# male analysis
+dsn.m <- subset(dsn.all, RIAGENDR == 'm')
+surv.m.raw <- xwas(design=dsn.m, adjfor=adjustfor[adjustfor != "RIAGENDR"])
+surv.m.coef <- lapply(surv.m.raw, function(x) { coef(summary(x)) })
+surv.m.r2 <- lapply(surv.m.raw, function(x) { weightedr2(x) }) # list of df
+surv.m <- xwas2df(surv.m.coef)
+surv.m <- annotate(surv.m)
+surv.m.sig <- subset(surv.m, q < 0.05)
+surv.m.sig <- surv.m.sig[order(surv.m.sig$beta), ]
+
+# female analysis
+dsn.f <- subset(dsn.all, RIAGENDR == 'f')
+surv.f.raw <- xwas(design=dsn.f, adjfor=adjustfor[adjustfor != "RIAGENDR"])
+surv.f.coef <- lapply(surv.f.raw, function(x) { coef(summary(x)) })
+surv.f.r2 <- lapply(surv.f.raw, function(x) { weightedr2(x) }) # list of df
+surv.f <- xwas2df(surv.f.coef)
+surv.f <- annotate(surv.f)
+surv.f.sig <- subset(surv.f, q < 0.05)
+surv.f.sig <- surv.f.sig[order(surv.f.sig$beta), ]
+
+# cohort analysis
+AvailableSeries <- names(table( dsn.all$variables$SDDSRVYR ))
+for (i in 1:length(AvailableSeries)) {
+  #eval(parse(text=paste0("MainTable.", "2")))
+  cat("Now analyzing", useTheseSeries[i], "series.\n")
+  
+  # dsn
+  assign( paste0("dsn.all.", i), subset(dsn.all, SDDSRVYR == AvailableSeries[i]))
+  assign( paste0("dsn.m.", i),   subset(dsn.m,   SDDSRVYR == AvailableSeries[i]))
+  assign( paste0("dsn.f.", i),   subset(dsn.f,   SDDSRVYR == AvailableSeries[i]))
+  
+  # survey
+  assign( paste0("surv.all.raw.", i), xwas(design=eval(parse(text=paste0("dsn.all.", i))), adjfor=adjustfor) ) 
+  assign( paste0("surv.m.raw.", i),   xwas(design=eval(parse(text=paste0("dsn.m.", i))),   adjfor=adjustfor[adjustfor != "RIAGENDR"]) )
+  assign( paste0("surv.f.raw.", i),   xwas(design=eval(parse(text=paste0("dsn.f.", i))),   adjfor=adjustfor[adjustfor != "RIAGENDR"]) )
+  
+  assign( paste0("surv.all.coef.", i), lapply(eval(parse(text=paste0("surv.all.raw.", i))), function(x) { coef(summary(x)) }) ) # list of df
+  assign( paste0("surv.m.coef.", i),   lapply(eval(parse(text=paste0("surv.m.raw.", i))), function(x) { coef(summary(x)) }) ) # list of df
+  assign( paste0("surv.f.coef.", i),   lapply(eval(parse(text=paste0("surv.f.raw.", i))), function(x) { coef(summary(x)) }) ) # list of df
+  
+  assign( paste0("surv.all.", i), annotate(xwas2df(eval(parse(text=paste0("surv.all.coef.", i))))) )
+  assign( paste0("surv.m.", i),   annotate(xwas2df(eval(parse(text=paste0("surv.m.coef.", i))))) )
+  assign( paste0("surv.f.", i),   annotate(xwas2df(eval(parse(text=paste0("surv.f.coef.", i))))) )
+  
+  assign( paste0("surv.all.sig.", i), subset(eval(parse(text=paste0("surv.all.", i))), q < 0.05) )
+  assign( paste0("surv.all.sig.", i), eval(parse(text=paste0("surv.all.sig.", i)))[order(eval(parse(text=paste0("surv.all.sig.", i)))$beta), ] )
+  
+  assign( paste0("surv.m.sig.", i), subset(eval(parse(text=paste0("surv.m.", i))), q < 0.05) )
+  assign( paste0("surv.m.sig.", i), eval(parse(text=paste0("surv.m.sig.", i)))[order(eval(parse(text=paste0("surv.m.sig.", i)))$beta), ] )
+  
+  assign( paste0("surv.f.sig.", i), subset(eval(parse(text=paste0("surv.f.", i))), q < 0.05) )
+  assign( paste0("surv.f.sig.", i), eval(parse(text=paste0("surv.f.sig.", i)))[order(eval(parse(text=paste0("surv.f.sig.", i)))$beta), ] )
+}
+```
+
+Create UpSetR visualizations for co-morbidities across time cohorts.
+
+```{r}
+# create space of all co-morbidities found across everything ever
+com.list.all <- rownames(surv.all.sig)
+com.list.m   <- rownames(surv.m.sig)
+com.list.f   <- rownames(surv.f.sig)
+
+for (i in 1:length(AvailableSeries)) {
+  com.list.all <- union( com.list.all, rownames(eval(parse(text=paste0("surv.all.sig.", i)))) )
+  com.list.m   <- union( com.list.m,   rownames(eval(parse(text=paste0("surv.m.sig.",   i)))) )
+  com.list.f   <- union( com.list.f,   rownames(eval(parse(text=paste0("surv.f.sig.",   i)))) )
+}
+
+# create a list of booleans for presence of each time cohort in the union list of all co-morbidities
+com.df.all <- data.frame(com.list.all, stringsAsFactors=F)
+com.df.m   <- data.frame(com.list.m,   stringsAsFactors=F)
+com.df.f   <- data.frame(com.list.f,   stringsAsFactors=F)
+
+com.df.all <- cbind(com.df.all, com.list.all %in% rownames(surv.all.sig))
+com.df.m   <- cbind(com.df.m,   com.list.m   %in% rownames(surv.m.sig))
+com.df.f   <- cbind(com.df.f,   com.list.f   %in% rownames(surv.f.sig))
+
+for (i in 1:length(AvailableSeries)) {
+  com.df.all <- cbind( com.df.all, com.list.all %in% rownames(eval(parse(text=paste0("surv.all.sig.", i)))) )
+  com.df.m   <- cbind( com.df.m, com.list.m   %in% rownames(eval(parse(text=paste0("surv.m.sig.",   i)))) )
+  com.df.f   <- cbind( com.df.f, com.list.f   %in% rownames(eval(parse(text=paste0("surv.f.sig.",   i)))) )
+}
+
+# convert from boolean to 1 and 0 for UpSetR processing
+com.df.all[, sapply(com.df.all, is.logical)] <- lapply(com.df.all[, sapply(com.df.all, is.logical)], as.numeric)
+com.df.m[,   sapply(com.df.m,   is.logical)] <- lapply(com.df.m[,   sapply(com.df.m, is.logical)], as.numeric)
+com.df.f[,   sapply(com.df.f,   is.logical)] <- lapply(com.df.f[,   sapply(com.df.f, is.logical)], as.numeric)
+
+colnames(com.df.all) <- c("Co-morbidity", "1999-2010", AvailableSeries)
+colnames(com.df.m)   <- c("Co-morbidity", "1999-2010", AvailableSeries)
+colnames(com.df.f)   <- c("Co-morbidity", "1999-2010", AvailableSeries)
+
+# UpSetR metadata
+usr.lbl.all <- data.frame(sets=colnames(com.df.all[2:ncol(com.df.all)]), CoM=unlist(strsplit(toString(apply(com.df.all[, 2:ncol(com.df.all)], 2, sum), row.names=NULL), ",")), stringsAsFactors=F)
+usr.lbl.m   <- data.frame(sets=colnames(com.df.m[2:ncol(com.df.m)]), CoM=unlist(strsplit(toString(apply(com.df.m[,   2:ncol(com.df.m)],   2, sum), row.names=NULL), ",")), stringsAsFactors=F)
+usr.lbl.f   <- data.frame(sets=colnames(com.df.f[2:ncol(com.df.f)]), CoM=unlist(strsplit(toString(apply(com.df.f[,   2:ncol(com.df.f)],   2, sum), row.names=NULL), ",")), stringsAsFactors=F)
+
+# visualize with UpSetR
+upset(com.df.all, sets=c("1999-2010", rev(AvailableSeries)), keep.order=T, order.by="freq", sets.x.label="Significant Co-morbidities \n (q < 0.05)", mainbar.y.label="Unique Co-morbidities",
+       #set.metadata=list(data=usr.lbl.all, plots=list(list(type="text", column="CoM", assign=10))),
+      queries=list(list(query=intersects, params=list("1999-2010"), color="red", active=T)) 
+)
+
+upset(com.df.all, sets=c("1999-2010", rev(AvailableSeries)), keep.order=T, order.by="freq", sets.x.label="Significant Co-morbidities \n (q < 0.05)", mainbar.y.label="Unique Co-morbidities",
+       #set.metadata=list(data=usr.lbl.all, plots=list(list(type="text", column="CoM", assign=10))),
+      queries=list(
+                   list(query=intersects, params=list("1999-2010", "1999-2000", "2001-2002", "2003-2004", "2005-2006", "2007-2008", "2009-2010"), color="red", active=T),
+                   list(query=intersects, params=list("1999-2010", "1999-2000", "2001-2002", "2003-2004", "2005-2006"), color="red", active=T),
+                   list(query=intersects, params=list("1999-2010", "1999-2000", "2001-2002", "2003-2004", "2007-2008", "2009-2010"), color="red", active=T),
+                   list(query=intersects, params=list("1999-2010", "1999-2000", "2001-2002", "2003-2004"), color="red", active=T),
+                   list(query=intersects, params=list("1999-2010", "1999-2000", "2001-2002", "2003-2004", "2007-2008"), color="red", active=T),
+                   list(query=intersects, params=list("1999-2010", "2001-2002", "2003-2004", "2007-2008", "2009-2010"), color="red", active=T),
+                   list(query=intersects, params=list("1999-2010", "2001-2002", "2003-2004", "2005-2006", "2007-2008"), color="red", active=T),
+                   list(query=intersects, params=list("1999-2010", "1999-2000", "2001-2002", "2003-2004", "2005-2006", "2007-2008"), color="red", active=T),
+                   list(query=intersects, params=list("1999-2010", "2003-2004", "2007-2008", "2009-2010"), color="red", active=T),
+                   list(query=intersects, params=list("1999-2010", "2005-2006", "2007-2008", "2009-2010"), color="red", active=T),
+                   list(query=intersects, params=list("1999-2010", "2001-2002", "2003-2004", "2005-2006", "2007-2008", "2009-2010"), color="red", active=T)
+                  )
+)
+
+upset(com.df.m,   sets=c("1999-2010", rev(AvailableSeries)), keep.order=T, order.by="freq", sets.x.label="Significant Co-morbidities \n (q < 0.05)", mainbar.y.label="Unique Co-morbidities",
+      #set.metadata=list(data=usr.lbl.all, plots=list(list(type="text", column="CoM", assign=10))),
+    queries=list(
+                 list(query=intersects, params=list("1999-2010", "1999-2000", "2001-2002", "2003-2004", "2005-2006", "2007-2008", "2009-2010"), color="red", active=T),
+                 list(query=intersects, params=list("1999-2010", "2001-2002", "2003-2004", "2005-2006", "2007-2008", "2009-2010"), color="red", active=T),
+                 list(query=intersects, params=list("1999-2010", "1999-2000", "2001-2002", "2003-2004", "2009-2010"), color="red", active=T),
+                 list(query=intersects, params=list("1999-2010", "2001-2002", "2003-2004", "2007-2008", "2009-2010"), color="red", active=T),
+                 list(query=intersects, params=list("1999-2010", "1999-2000", "2001-2002", "2003-2004"), color="red", active=T),
+                 list(query=intersects, params=list("1999-2010", "1999-2000", "2001-2002", "2003-2004", "2005-2006"), color="red", active=T),
+                 list(query=intersects, params=list("1999-2010", "2001-2002", "2003-2004", "2007-2008"), color="red", active=T),
+                 list(query=intersects, params=list("1999-2010", "2001-2002", "2003-2004", "2005-2006", "2007-2008"), color="red", active=T),
+                 list(query=intersects, params=list("1999-2010", "1999-2000", "2001-2002", "2003-2004", "2005-2006", "2009-2010"), color="red", active=T),
+                 list(query=intersects, params=list("1999-2010", "2001-2002", "2007-2008", "2009-2010"), color="red", active=T),
+                 list(query=intersects, params=list("1999-2010", "2005-2006", "2007-2008", "2009-2010"), color="red", active=T)
+                ) 
+)
+
+upset(com.df.f,   sets=c("1999-2010", rev(AvailableSeries)), keep.order=T, order.by="freq", sets.x.label="Significant Co-morbidities \n (q < 0.05)", mainbar.y.label="Unique Co-morbidities",
+      #set.metadata=list(data=usr.lbl.all, plots=list(list(type="text", column="CoM", assign=5))), 
+    queries=list(
+                  list(query=intersects, params=list("1999-2010", "1999-2000", "2001-2002", "2003-2004", "2005-2006", "2007-2008", "2009-2010"), color="red", active=T),
+                  list(query=intersects, params=list("1999-2010", "1999-2000", "2001-2002", "2003-2004", "2007-2008", "2009-2010"), color="red", active=T),
+                  list(query=intersects, params=list("1999-2010", "2001-2002", "2003-2004", "2007-2008", "2009-2010"), color="red", active=T),
+                  list(query=intersects, params=list("1999-2010", "2001-2002", "2003-2004", "2007-2008", "2009-2010"), color="red", active=T),
+                  list(query=intersects, params=list("1999-2010", "2001-2002", "2003-2004", "2009-2010"), color="red", active=T),
+                  list(query=intersects, params=list("1999-2010", "1999-2000", "2001-2002", "2003-2004", "2005-2006", "2007-2008"), color="red", active=T),
+                  list(query=intersects, params=list("1999-2010", "2001-2002", "2003-2004", "2005-2006", "2007-2008"), color="red", active=T),
+                  list(query=intersects, params=list("1999-2010", "1999-2000", "2003-2004", "2007-2008"), color="red", active=T),
+                  list(query=intersects, params=list("1999-2010", "1999-2000", "2001-2002", "2003-2004", "2005-2006"), color="red", active=T),
+                  list(query=intersects, params=list("1999-2010", "2001-2002", "2003-2004", "2005-2006"), color="red", active=T),
+                  list(query=intersects, params=list("1999-2010", "2003-2004", "2007-2008", "2009-2010"), color="red", active=T)
+                )
+)
+```
+
+Re-process UpSetR data to get list of co-morbidities for all and by gender. Criteria is anything that appears in analysis across all cohorts (1999-2010) or in at least 3 different cohorts individually. Use those comorbities if they have a beta value for mortality of > 0.25 or < -0.25.
+
+```{r}
+com.list.all <- intersect(com.df.all[com.df.all$`1999-2010` == 1,]$`Co-morbidity`,       
+                          com.df.all$`Co-morbidity`[apply(com.df.all[, 3:ncol(com.df.all)], 1, sum) > 2])
+
+com.list.m <- intersect(com.df.m[com.df.m$`1999-2010` == 1,]$`Co-morbidity`, 
+                        com.df.m$`Co-morbidity`[apply(com.df.m[, 3:ncol(com.df.m)], 1, sum) > 2])
+
+com.list.f <- intersect(com.df.f[com.df.f$`1999-2010` == 1,]$`Co-morbidity`,
+                        com.df.f$`Co-morbidity`[apply(com.df.f[, 3:ncol(com.df.f)], 1, sum) > 2])
+
+com.all <- subset(surv.all.sig[com.list.all, ], abs(beta) > 0.25)
+com.all <- merge(com.all, unlist(surv.all.r2), by="row.names", all.x=TRUE)
+row.names(com.all) <- com.all$Row.names
+com.all$Row.names <- NULL
+colnames(com.all)[ncol(com.all)] <- "r2"
+com.all$p2 <- pnorm(abs(com.all$beta/com.all$se), lower.tail=F)*2
+com.all <- com.all[order(com.all$beta),]
+
+com.m <- subset(surv.m.sig[com.list.m, ], abs(beta) > 0.25)
+com.m <- merge(com.m, unlist(surv.m.r2), by="row.names", all.x=TRUE)
+row.names(com.m) <- com.m$Row.names
+com.m$Row.names <- NULL
+colnames(com.m)[ncol(com.m)] <- "r2"
+com.m$p2 <- pnorm(abs(com.m$beta/com.m$se), lower.tail=F)*2
+com.m <- com.m[order(com.m$beta),]
+
+com.f <- subset(surv.f.sig[com.list.f, ], abs(beta) > 0.25)
+com.f <- merge(com.f, unlist(surv.f.r2), by="row.names", all.x=TRUE)
+row.names(com.f) <- com.f$Row.names
+com.f$Row.names <- NULL
+colnames(com.f)[ncol(com.f)] <- "r2"
+com.f$p2 <- pnorm(abs(com.f$beta/com.f$se), lower.tail=F)*2
+com.f <- com.f[order(com.f$beta),]
+```
+
+Now test your significant list for r^2 values.
+
+```{r}
+com.both <- intersect(rownames(com.m), rownames(com.f))
+baseformula <- as.formula(sprintf('Surv(%s, %s) ~ cluster(area)', "PERMTH_EXM", "MORTSTAT"))
+baseformula <- addToBase(baseformula, adjustfor)
+baseformula <- addToBase(baseformula, com.both)
+
+print(baseformula) # our final model
+
+coxph(baseformula, data=dsn.all$variables, weights=1/dsn.all$allprob[, 1])  # changed to coxph
+
+weightedr2( coxph(baseformula, data=dsn.all$variables, weights=1/dsn.all$allprob[, 1]) )
+```
+
+Volcano action.
+
+```{r}
+plot(surv.all$beta, -log10(surv.all$p), xlab="Association Size", ylab=expression(-log[10]*'(p-value)'), pch=20, xlim=c(-3,3), frame.plot=F)
+points(surv.all.sig$beta, -log10(surv.all.sig$p), col="red", pch=20)
+
+plot(surv.m$beta, -log10(surv.m$p), xlab="Association Size", ylab=expression(-log[10]*'(p-value)'), pch=20, xlim=c(-3,3), frame.plot=F)
+points(surv.m.sig$beta, -log10(surv.m.sig$p), col="red", pch=20)
+
+plot(surv.f$beta, -log10(surv.f$p), xlab="Association Size", ylab=expression(-log[10]*'(p-value)'), pch=20, xlim=c(-3,3), frame.plot=F)
+points(surv.f.sig$beta, -log10(surv.f.sig$p), col="red", pch=20)
+
+```
+
+***RE-THINK SIMPLIFYING THINGS BELOW THIS LINE***
+
+Factors decreasing and increasing mortality in all people.
+
+```{r}
+cat("There are", nrow(surv.all.sig), "factors impacting mortality in humans.")
+
+# factors decreasing mortality
+head(surv.all.sig) # all over all time cohorts
+for (i in 1:length(AvailableSeries)) { 
+  print(cat("Series (all)", AvailableSeries[i], "\n"))
+  print(head( eval(parse(text=paste0("surv.all.sig.", i))) )) 
+}
+
+# factors increasing mortality
+tail(surv.all.sig) 
+for (i in 1:length(AvailableSeries)) { 
+  print(cat("Series (all)", AvailableSeries[i], "\n"))
+  print(tail( eval(parse(text=paste0("surv.all.sig.", i))) )) 
+}
+```
+
+Factors decreasing and increasing mortality in just males.
+
+```{r}
+cat("There are", nrow(surv.m.sig), "factors impacting mortality for males.")
+
+# factors decreasing mortality
+head(surv.m.sig) # male over all time cohorts
+for (i in 1:length(AvailableSeries)) { 
+  print(cat("Series (m)", AvailableSeries[i], "\n"))
+  print(head( eval(parse(text=paste0("surv.m.sig.", i))) )) 
+}
+
+# factors increasing mortality
+tail(surv.m.sig) 
+for (i in 1:length(AvailableSeries)) { 
+  print(cat("Series (all)", AvailableSeries[i], "\n"))
+  print(tail( eval(parse(text=paste0("surv.m.sig.", i))) )) 
+}
+```
+
+Factors decreasing and increasing mortality in just females.
+
+```{r}
+cat("There are", nrow(surv.f.sig), "factors impacting mortality for females.")
+
+# factors decreasing mortality
+head(surv.f.sig) # female over all time cohorts
+for (i in 1:length(AvailableSeries)) { 
+  print(cat("Series (f)", AvailableSeries[i], "\n"))
+  print(head( eval(parse(text=paste0("surv.f.sig.", i))) )) 
+}
+
+# factors increasing mortality
+tail(surv.f.sig) 
+for (i in 1:length(AvailableSeries)) { 
+  print(cat("Series (all)", AvailableSeries[i], "\n"))
+  print(tail( eval(parse(text=paste0("surv.f.sig.", i))) )) 
+}
+```
+
+Do some visualization (should have loaded `venneuler`).
+
+```{r}
+MnF   <- table(c(rownames(surv.m.sig),   rownames(surv.f.sig))) > 1
+AnM   <- table(c(rownames(surv.all.sig), rownames(surv.m.sig))) > 1
+AnF   <- table(c(rownames(surv.all.sig), rownames(surv.f.sig))) > 1
+AnMnF <- table(c(rownames(surv.all.sig), rownames(surv.m.sig), rownames(surv.m.sig))) > 2
+
+OnlyA <- rownames(surv.all.sig)[!rownames(surv.all.sig) %in% c(rownames(surv.m.sig), rownames(surv.f.sig))]
+OnlyM <- rownames(surv.m.sig)[!rownames(surv.m.sig) %in% c(rownames(surv.all.sig), rownames(surv.f.sig))]
+OnlyF <- rownames(surv.f.sig)[!rownames(surv.f.sig) %in% c(rownames(surv.all.sig), rownames(surv.m.sig))]
+
+vd <- venneuler(
+    c(
+      All=nrow(surv.all.sig), M=nrow(surv.m.sig), F=nrow(surv.f.sig),
+      "M&F"=length(MnF[MnF]),
+      "All&M"=length(AnM[AnM]),
+      "All&F"=length(AnF[AnF]),
+      "All&M&F"=length(AnMnF[AnMnF])
+    )
+  )
+
+plot(vd)
+```
+
+Co-morbidities present in both genders analyzed separately (M and F).
+
+```{r}
+unique(subset(VarDescription, var %in% names(MnF[MnF]))[, c("var", "var_desc", "var_desc_ewas")])
+```
+
+Co-morbidities present in across All and M groups.
+
+```{r}
+unique(subset(VarDescription, var %in% names(AnM[AnM]))[, c("var", "var_desc", "var_desc_ewas")])
+```
+
+Co-morbidities present in across All and F groups.
+
+```{r}
+unique(subset(VarDescription, var %in% names(AnF[AnF]))[, c("var", "var_desc", "var_desc_ewas")])
+```
+
+Co-morbidities present in across All and M and F groups.
+
+```{r}
+unique(subset(VarDescription, var %in% names(AnMnF[AnMnF]))[, c("var", "var_desc", "var_desc_ewas")])
+```
+
+Co-morbidities present only in All.
+
+```{r}
+subset(surv.all.sig, var %in% OnlyA)
+```
+
+Co-morbidities present only in M.
+
+```{r}
+subset(surv.m.sig, var %in% OnlyM)
+```
+
+Co-morbidities present only in F.
+
+```{r}
+subset(surv.f.sig, var %in% OnlyF)
+```
+
+IGNORE BELOW THIS LINE FOR NOW, storing rough draft code.
+
+```{r eval=FALSE}
+par(mfrow=c(1,1), xpd=TRUE) # setup to plot outside of area if necessary
+
+groups <- subset(VarDescription, var_desc_ewas %in% useTheseCategories)[, c("var_desc_ewas", "var")]
+groups <- unique(groups)
+
+# http://stackoverflow.com/questions/3932038/plot-a-legend-outside-of-the-plotting-area-in-base-graphics
+n <- length(unique(groups$var_desc_ewas))
+
+margins <- par()$mar
+manhattan(test, group.by=groups, group.col=rainbow(n), legend=F, xlab="", nlabels=5)
+par(oma=c(4, 1, 1, 1))
+par(fig=c(0, 1, 0, 1), oma=c(0, 0, 0, 0), mar=c(0, 0, 0, 0), new = TRUE)
+plot(0, 0, type = "n", bty = "n", xaxt = "n", yaxt = "n")
+legend("bottom", names(table(groups$var_desc_ewas)), xpd=TRUE, inset=c(0, 0), bty="n", text.col=rainbow(n), ncol=4, cex=0.7)
+par(mar=margins)
+
+top <- xwas.to.df(test) # convert xwas results to a data.frame
+
+# create a table with the labels and descriptions for each variable used
+labels <- subset(VarDescription, var_desc_ewas %in% useTheseCategories)[, c("var", "var_desc", "var_desc_ewas")]
+labels <- labels[!duplicated(labels$var), ]
+rownames(labels) <- labels$var
+
+# match variables from the xwas output to the labels object
+top <- merge(top, labels, all.x=TRUE, by="row.names")
+rownames(top) <- top$Row.names
+top <- top[, -which(colnames(top) %in% c("Row.names", "var"))]
+top.q <- top[order(top$q, decreasing=F), ]
+top.x <- top[order(top$x, decreasing=T), ]
+
+# show the top 10 results with p-values and descriptions
+head(top, n=10)
+
+volcano(test, xlim=c(0,2), xlab="Association Size")
+
+glupredictrange <- c(100)
+agepredictrange <- c(50)
+
+s <- predict(glucose.m.1999, se=TRUE, type="curve", newdata=data.frame(LBXGLU=log(glupredictrange), RIDAGEYR=agepredictrange, RIDAGEYR2=agepredictrange^2, RIDRETH1=c(1)))
+
+plot(s[[1]], ci=TRUE, col="sienna")
+#lines(s[[2]], ci=TRUE, col="royalblue")
+quantile(s[[1]], ci=TRUE)
+#confint(s[[2]], parm=365*(1:5))
+```
+
