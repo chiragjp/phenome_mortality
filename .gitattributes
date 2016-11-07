@@ -1,1 +1,2 @@
 nhanes_schema_merged_all_031816.Rdata filter=lfs diff=lfs merge=lfs -text
+*.Rdata filter=lfs diff=lfs merge=lfs -text
