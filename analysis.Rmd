@@ -79,6 +79,8 @@ length(FinalVariableList) # final list of variables is 281
 
 Some data points are duplicates (e.g., SI measurements). Find all the lab measures that end in SI suffix and store in `SIduplicates` as the search space. Find variables that exist in whole text plus again with SI appended to the end and log it in new list while removing from the `FinalVariableList`.
 
+Also remove the redundant 1/Creatinine measure (`LBXSCRINV`).
+
 ```{r}
 SIduplicates <- FinalVariableList[grep("SI$", FinalVariableList)]
 length(SIduplicates) # 44 potential duplicates
@@ -99,7 +101,9 @@ for (i in SIduplicates) {
 
 SIduplicates.removed # only 4 duplicated measurements reported as SI
 
-FinalVariableList <- FinalVariableList[!(FinalVariableList %in% SIduplicates.removed)] # remove the imposters
+FinalVariableList <- FinalVariableList[!(FinalVariableList %in% SIduplicates.removed)] # remove the SI imposters
+
+FinalVariablelist <- FinalVariableList[FinalVariableList != "LBXSCRINV"] # remove the redundant inverted creatinine measure
 
 length(FinalVariableList) # final variable list is now 257
 ```
@@ -267,7 +271,7 @@ for (year in names(table(MainTable.cleaned$SDDSRVYR))) {
   cat(
     paste0(year, "\t",
            round(table(subset(MainTable.cleaned, SDDSRVYR == year & !is.na(MORTSTAT))$RIDRETH1), digits=1), " ", 
-           "(", round(prop.table(table(subset(MainTable.cleaned, SDDSRVYR == year)$RIDRETH1))*100, digits=2), ")"
+           "(", round(prop.table(table(subset(MainTable.cleaned, SDDSRVYR == year & !is.na(MORTSTAT))$RIDRETH1))*100, digits=2), ")"
            ), 
     "\n")
 }
