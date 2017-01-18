@@ -1,6 +1,6 @@
 ---
-title: "verbose.R"
-date: "October 14, 2016"
+title: "analysis.R"
+date: "January 17, 2017"
 output: html_document
 ---
 
@@ -17,6 +17,7 @@ library(polycor)    # ???
 library(Hmisc)      # ???
 library(venneuler)  # venn diagrams 
 library(UpSetR)     # specific plot
+library(rmeta)      # for meta-analysis functions
 ```
 
 In the `nhanes_schema_merged_all_031816.Rdata` file you can load with the Dropbox or custom path. `bigData` and `tabDesc` in the new NHANES data maps with `MainTable` and `VarDescription` from the Scientific Data paper. I remapped this data so you could comment out this section and for the most part still run the code as-is if you wanted to use the package version or prior data.
@@ -502,7 +503,8 @@ surv.age.below.sig <- subset(surv.age.below, q < 0.05)
 surv.age.below.sig <- surv.age.below.sig[order(surv.age.below.sig$beta), ]
 
 # race analysis - LATIN
- dsn.race.latin <- subset(dsn.all, RIDRETH1 == 1 | RIDRETH1 == 2)
+ dsn.race.latin <- subset(dsn.all, RIDRETH1 == 1) # only mexican-american
+#dsn.race.latin <- subset(dsn.all, RIDRETH1 == 1 | RIDRETH1 == 2) # mexican-american and other latin
 surv.race.latin.raw <- xwas(design=dsn.race.latin, adjfor=adjustfor[adjustfor != "RIDRETH1"])
 surv.race.latin.coef <- lapply(surv.race.latin.raw, function(x) { coef(summary(x)) })
 surv.race.latin.r2 <- lapply(surv.race.latin.raw, function(x) { weightedr2(x) }) # list of df
@@ -627,6 +629,99 @@ points(surv.m.sig$beta, -log10(surv.m.sig$p), col="red", pch=20)
 
 plot(surv.f$beta, -log10(surv.f$p), xlab="Association Size", ylab=expression(-log[10]*'(p-value)'), pch=20, xlim=c(-3,3), frame.plot=F)
 points(surv.f.sig$beta, -log10(surv.f.sig$p), col="red", pch=20)
+```
+
+Do `rmeta` analysis.
+
+```{r}
+xmeta <- function(x) {
+  #print(x)
+  tmp <- c()
+  for (i in 1:6) {
+    tmp <- c(tmp, eval(parse(text=paste0(x, i)))$var)
+  }
+  meta.beta <- data.frame(var=unique(tmp))
+  meta.se <- data.frame(var=unique(tmp))
+
+  for (i in 1:6) {
+    suppressWarnings( meta.beta <- merge(meta.beta, eval(parse(text=paste0(x, i)))[, c("beta", "var")], by="var", all.x=T) )
+    suppressWarnings( meta.se <- merge(meta.se, eval(parse(text=paste0(x, i)))[, c("se", "var")], by="var", all.x=T) )
+  }
+  
+  rownames(meta.beta) <- meta.beta$var
+  rownames(meta.se) <- meta.se$var
+
+  meta.beta$var <- NULL
+  meta.se$var <- NULL
+  
+  colnames(meta.beta) <- c(AvailableSeries)
+  colnames(meta.se) <- c(AvailableSeries)
+
+  meta.all <- list() # stores all the meta analysis results
+  meta.var <- rownames(meta.beta)[apply(meta.beta, 1, function(x) { table(complete.cases(x))["TRUE"] }) > 2] # list of lab values that are significant in at least 3 cohorts
+
+  for (i in meta.var) {
+    use <- complete.cases(t(meta.beta[i, ]))
+    meta.all[[i]] <- meta.summaries(d=as.numeric(meta.beta[i, use]), se=as.numeric(meta.se[i, use]), names=AvailableSeries[use], method="random")
+  }
+
+  return(meta.all)
+}
+
+xmeta2df <- function(x) {
+  meta.final <- c()
+  
+  for (i in 1:length(x)) {
+    meta.summary <- summary(x[[i]])
+    # overall effect, lower CI 95%, upper CI 95%, p-value, tau2 
+    meta.final <- rbind(meta.final, c(meta.summary$summci[2], meta.summary$summci[1], meta.summary$summci[3], meta.summary$het[3], meta.summary$tau2))
+  }
+  rownames(meta.final) <- names(x)
+  colnames(meta.final) <- c("Effect", "Lower", "Upper", "p", "tau2")
+  
+  meta.final <- merge(meta.final, VarDescription[match(unique(VarDescription$var), VarDescription$var), c("var", "var_desc")], by.x="row.names", by.y="var")
+  rownames(meta.final) <- meta.final$Row.names
+  meta.final$Row.names <- NULL
+  meta.final <- meta.final[order(meta.final$Effect), ]
+  
+  return(meta.final)
+}
+
+# x <- "surv.all.sig."
+surv.all.meta.raw <- xmeta("surv.all.sig.")
+surv.all.meta     <- xmeta2df(surv.all.meta.raw)
+surv.all.meta.sig <- surv.all.meta[surv.all.meta$p < 0.05, ]
+
+surv.m.meta.raw <- xmeta("surv.m.sig.")
+surv.m.meta     <- xmeta2df(surv.m.meta.raw)
+surv.m.meta.sig <- surv.m.meta[surv.m.meta$p < 0.05, ]
+surv.f.meta.raw <- xmeta("surv.f.sig.")
+surv.f.meta     <- xmeta2df(surv.f.meta.raw)
+surv.f.meta.sig <- surv.f.meta[surv.f.meta$p < 0.05, ]
+
+surv.age.above.meta.raw <- xmeta("surv.age.above.sig.")
+surv.age.above.meta     <- xmeta2df(surv.age.above.meta.raw)
+surv.age.above.meta.sig <- surv.age.above.meta[surv.age.above.meta$p < 0.05, ]
+surv.age.below.meta.raw <- xmeta("surv.age.below.sig.")
+surv.age.below.meta     <- xmeta2df(surv.age.below.meta.raw)
+surv.age.below.meta.sig <- surv.age.below.meta[surv.age.below.meta$p < 0.05, ]
+
+surv.pir.above.meta.raw <- xmeta("surv.pir.above.sig.")
+surv.pir.above.meta     <- xmeta2df(surv.pir.above.meta.raw)
+surv.pir.above.meta.sig <- surv.pir.above.meta[surv.pir.above.meta$p < 0.05, ]
+surv.pir.below.meta.raw <- xmeta("surv.pir.below.sig.")
+surv.pir.below.meta     <- xmeta2df(surv.pir.below.meta.raw)
+surv.pir.below.meta.sig <- surv.pir.below.meta[surv.pir.below.meta$p < 0.05, ]
+
+surv.race.white.meta.raw <- xmeta("surv.race.white.sig.")
+surv.race.white.meta     <- xmeta2df(surv.race.white.meta.raw)
+surv.race.white.meta.sig <- surv.race.white.meta[surv.race.white.meta$p < 0.05, ]
+surv.race.black.meta.raw <- xmeta("surv.race.black.sig.")
+surv.race.black.meta     <- xmeta2df(surv.race.black.meta.raw)
+surv.race.black.meta.sig <- surv.race.black.meta[surv.race.black.meta$p < 0.05, ]
+surv.race.latin.meta.raw <- xmeta("surv.race.latin.sig.")
+surv.race.latin.meta     <- xmeta2df(surv.race.latin.meta.raw)
+surv.race.latin.meta.sig <- surv.race.latin.meta[surv.race.latin.meta$p < 0.05, ]
 ```
 
 Create UpSetR visualizations for comorbidities across time cohorts, highlights those that appear significant in at least in 3+ (half) of the time cohorts as well as in the total analysis.
@@ -995,7 +1090,7 @@ Now test your significant list for r^2 values for all comorbidities.
 ```{r}
 baseformula <- as.formula(sprintf('Surv(%s, %s) ~ cluster(area)', "PERMTH_EXM", "MORTSTAT"))
 baseformula <- addToBase(baseformula, adjustfor)
-baseformula <- addToBase(baseformula, com.all)
+baseformula <- addToBase(baseformula, rownames(com.all))
 
 print(baseformula) # our final model
 
