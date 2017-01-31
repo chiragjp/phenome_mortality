@@ -17,15 +17,15 @@ library(polycor)    # ???
 library(Hmisc)      # ???
 library(venneuler)  # venn diagrams 
 library(UpSetR)     # specific plot
-library(rmeta)      # for meta-analysis functions
+library(metafor)    # meta-analysis package
 ```
 
 In the `nhanes_schema_merged_all_031816.Rdata` file you can load with the Dropbox or custom path. `bigData` and `tabDesc` in the new NHANES data maps with `MainTable` and `VarDescription` from the Scientific Data paper. I remapped this data so you could comment out this section and for the most part still run the code as-is if you wanted to use the package version or prior data.
 
 ```{r}
 #load('~/Dropbox (RagGroup)/RagGroup Team Folder/nhanes_merged_data/nhanes_schema_merged_all_031816.Rdata')
-load('~/src/phenome-mortality/nhanes_schema_merged_all_031816.Rdata')
-#load('~/Dropbox/NHANES/nhanes_schema_merged_all_031816.Rdata')
+#load('~/src/phenome-mortality/nhanes_schema_merged_all_031816.Rdata')
+load('~/Dropbox/NHANES/nhanes_schema_merged_all_031816.Rdata')
 
 MainTable <- bigData
 VarDescription <- tabDesc
@@ -84,7 +84,7 @@ Also remove the redundant 1/Creatinine measure (`LBXSCRINV`).
 
 ```{r}
 SIduplicates <- FinalVariableList[grep("SI$", FinalVariableList)]
-length(SIduplicates) # 44 potential duplicates
+length(SIduplicates) # 41 potential duplicates
 
 SIduplicates.removed <- c()
 
@@ -113,8 +113,12 @@ Before we go further let's review our chosen variables.
 
 ```{r}
 final.table <- subset(VarDescription, var %in% FinalVariableList)
+final.table <- final.table[order(final.table$var, final.table$series), ] # sort by columns
+final.table <- final.table[, c("var_desc", "var", "module", "tab_desc", "var_desc_ewas", "series")] # remove columns we don't care about
+final.table <- as.data.frame(apply(final.table, 2, tolower), stringsAsFactors=F) # uniform lowercase descriptors
+final.table <- aggregate(. ~ var, final.table, function(x) { toString(unique(x)) } ) # collapse multiple year entries per variable
 
-pie(table(final.table$series), main="Variables to Analyze by Survey Year")
+final.table$var <- toupper(final.table$var) # pretty print formatting, uppercase var names
 
 pie(sort(table(final.table$var_desc_ewas)), main="Variables to Analyze by Category")
 ```
@@ -127,6 +131,8 @@ adjustfor <- c('RIDAGEYR', 'RIDAGEYR2', 'RIAGENDR', 'INDFMPIR', 'RIDRETH1') # cl
 variablesToKeep <- c('PERMTH_EXM', 'MORTSTAT', adjustfor, FinalVariableList, 'SDDSRVYR', 'SDMVPSU', 'SDMVSTRA', 'WTMEC2YR', 'WTMEC4YR', 'area')
 
 MainTable.2 <- MainTable[, colnames(MainTable) %in% variablesToKeep]
+
+MainTable.2 <- as.data.frame(MainTable.2) # somehow is a tibble, convert to df so legacy code works
 ```
 
 How many people actually have mortality in the data compared to our subset? Look at distribution of time to censorship or death (`PERMTH_EXM`) then subset the patient list to those for the survey year (`SDDSRVYR`) of before or equal to 6 or earlier than the 2009-2010 (excluding 2011-2012 and 2013-2014).
@@ -631,7 +637,7 @@ plot(surv.f$beta, -log10(surv.f$p), xlab="Association Size", ylab=expression(-lo
 points(surv.f.sig$beta, -log10(surv.f.sig$p), col="red", pch=20)
 ```
 
-Do `rmeta` analysis.
+Do `metafor` analysis but first create some wrapper functions to process each substratified analysis.
 
 ```{r}
 xmeta <- function(x) {
@@ -658,11 +664,11 @@ xmeta <- function(x) {
   colnames(meta.se) <- c(AvailableSeries)
 
   meta.all <- list() # stores all the meta analysis results
-  meta.var <- rownames(meta.beta)[apply(meta.beta, 1, function(x) { table(complete.cases(x))["TRUE"] }) > 2] # list of lab values that are significant in at least 3 cohorts
+  meta.var <- rownames(meta.beta)[apply(meta.beta, 1, function(x) { table(complete.cases(x))["TRUE"] }) >= 2] # list of lab values that are significant in at least 2 cohorts
 
   for (i in meta.var) {
     use <- complete.cases(t(meta.beta[i, ]))
-    meta.all[[i]] <- meta.summaries(d=as.numeric(meta.beta[i, use]), se=as.numeric(meta.se[i, use]), names=AvailableSeries[use], method="random")
+    meta.all[[i]] <- rma(yi=as.numeric(meta.beta[i, use]), sei=as.numeric(meta.se[i, use]), method="REML", slab=AvailableSeries[use]) # using metafor package
   }
 
   return(meta.all)
@@ -671,22 +677,34 @@ xmeta <- function(x) {
 xmeta2df <- function(x) {
   meta.final <- c()
   
-  for (i in 1:length(x)) {
-    meta.summary <- summary(x[[i]])
-    # overall effect, lower CI 95%, upper CI 95%, p-value, tau2 
-    meta.final <- rbind(meta.final, c(meta.summary$summci[2], meta.summary$summci[1], meta.summary$summci[3], meta.summary$het[3], meta.summary$tau2))
+  for (i in x) {
+    ### metafor extraction
+    # overall effect, lower CI 95%, upper CI 95%, p-value, tau2, I2
+    meta.final <- rbind(meta.final, c(i$b, i$ci.lb, i$ci.ub, i$pval, i$I2))
   }
   rownames(meta.final) <- names(x)
-  colnames(meta.final) <- c("Effect", "Lower", "Upper", "p", "tau2")
+  colnames(meta.final) <- c("Effect", "Lower", "Upper", "p", "I2") # label metafor analysis
+  
+  meta.final[, c("Effect")] <- exp(meta.final[, c("Effect")]) # convert beta coefficients to OR
+  meta.final[, c("Lower")] <- exp(meta.final[, c("Lower")]) # convert lower beta estimate to OR
+  meta.final[, c("Upper")] <- exp(meta.final[, c("Upper")]) # convert upper beta estimate to OR
+  
+  meta.final <- signif(meta.final, digits=3) # make values 3 significant figures
   
   meta.final <- merge(meta.final, VarDescription[match(unique(VarDescription$var), VarDescription$var), c("var", "var_desc")], by.x="row.names", by.y="var")
   rownames(meta.final) <- meta.final$Row.names
   meta.final$Row.names <- NULL
-  meta.final <- meta.final[order(meta.final$Effect), ]
+  meta.final <- meta.final[order(meta.final$Effect), ] # increasing OR
   
-  return(meta.final)
+  meta.final$CI <- paste(meta.final$Lower, meta.final$Upper, sep=", ")
+  
+  return(meta.final[, c("var_desc", "Effect", "CI", "p", "I2")]) # reorder df as it's returned
 }
+```
 
+Now loop through each substratified analysis to do the meta-analysis.
+
+```{r}
 # x <- "surv.all.sig."
 surv.all.meta.raw <- xmeta("surv.all.sig.")
 surv.all.meta     <- xmeta2df(surv.all.meta.raw)
