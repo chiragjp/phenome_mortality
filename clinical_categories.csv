@@ -1,0 +1,166 @@
+var_desc_dep_var,dep_var,var_desc_ewas_dep_var,category
+Transferrin saturation,LBDPCT,biochemistry,blood
+Protoporphyrin,LBXEPP,biochemistry,blood
+Ferritin,LBXFER,biochemistry,blood
+Hematocrit,LBXHCT,blood,blood
+Hemoglobin,LBXHGB,blood,blood
+MCHC,LBXMC,blood,blood
+Mean cell hemoglobin,LBXMCHSI,blood,blood
+Mean cell volume,LBXMCVSI,blood,blood
+Mean platelet volume,LBXMPSI,blood,blood
+Segmented neutrophils percent,LBXNEPCT,blood,blood
+Platelet count SI,LBXPLTSI,blood,blood
+Red blood cell count,LBXRBCSI,blood,blood
+Red cell distribution width,LBXRDW,blood,blood
+"Iron, refigerated",LBXSIR,biochemistry,blood
+"TIBC, Frozen Serum",LBXTIB,biochemistry,blood
+60 sec HR,BPXCHR,blood pressure,blood pressure
+60 sec. pulse:,BPXPLS,blood pressure,blood pressure
+mean diastolic,MDIS,blood pressure,blood pressure
+mean systolic,MSYS,blood pressure,blood pressure
+Body Mass Index,BMXBMI,body measures,body measures
+Maximal Calf Circumference,BMXCALF,body measures,body measures
+Head Circumference,BMXHEAD,body measures,body measures
+Standing Height,BMXHT,body measures,body measures
+Upper Leg Length,BMXLEG,body measures,body measures
+Recumbent Length,BMXRECUM,body measures,body measures
+Subscapular Skinfold,BMXSUB,body measures,body measures
+Thigh Circumference,BMXTHICR,body measures,body measures
+Triceps Skinfold,BMXTRI,body measures,body measures
+Waist Circumference,BMXWAIST,body measures,body measures
+Weight,BMXWT,body measures,body measures
+Total BMD,DXDTOBMD,body measures,bone
+Total Fat,DXDTOFAT,body measures,body measures
+Total Lean excl BMC,DXDTOLE,body measures,body measures
+Trunk Lean excl BMC,DXDTRLE,body measures,body measures
+Head BMD,DXXHEBMD,body measures,bone
+Lumber Spine BMD,DXXLSBMD,body measures,bone
+Lumber Pelvis BMD,DXXPEBMD,body measures,bone
+Trunk Fat,DXXTRFAT,body measures,body measures
+Bone alkaline phosphotase,LBXBAP,biochemistry,bone
+Prostate specific antigen ratio,LBDP3,biochemistry,cancer
+PSA. total,LBXP1,biochemistry,cancer
+"PSA, free",LBXP2,biochemistry,cancer
+Basophils number,LBDBANO,blood,immunological
+Eosinophils number,LBDEONO,blood,immunological
+Lymphocyte number,LBDLYMNO,blood,immunological
+Monocyte number,LBDMONO,blood,immunological
+Segmented neutrophils number,LBDNENO,blood,immunological
+Basophils percent,LBXBAPCT,blood,immunological
+C-reactive protein,LBXCRP,biochemistry,immunological
+Eosinophils percent,LBXEOPCT,blood,immunological
+Lymphocyte percent,LBXLYPCT,blood,immunological
+Monocyte percent,LBXMOPCT,blood,immunological
+Blood urea nitrogen,LBXSBU,biochemistry,kidney
+Bicarbonate,LBXSC3SI,biochemistry,kidney
+Total calcium,LBXSCA,biochemistry,kidney
+Chloride,LBXSCLSI,biochemistry,kidney
+Creatinine,LBXSCR,biochemistry,kidney
+1/Creatinine,LBXSCRINV,biochemistry,kidney
+Potassium,LBXSKSI,biochemistry,kidney
+Sodium,LBXSNASI,biochemistry,kidney
+Osmolality,LBXSOSSI,biochemistry,kidney
+Phosphorus,LBXSPH,biochemistry,kidney
+Uric acid,LBXSUA,biochemistry,kidney
+"Creatinine, urine",URXUCR,biochemistry,kidney
+"Albumin, urine",URXUMA,biochemistry,kidney
+Albumin,LBXSAL,biochemistry,liver
+Alkaline phosphotase,LBXSAPSI,biochemistry,liver
+Aspartate aminotransferase AST,LBXSASSI,biochemistry,liver
+Alanine aminotransferase ALT,LBXSATSI,biochemistry,liver
+Globulin,LBXSGB,biochemistry,liver
+Gamma glutamyl transferase,LBXSGTSI,biochemistry,liver
+Lactate dehydrogenase LDH,LBXSLDSI,biochemistry,liver
+Total bilirubin,LBXSTB,biochemistry,liver
+Total protein,LBXSTP,biochemistry,liver
+Direct HDL-Cholesterol,LBDHDL,biochemistry,heart
+LDL-cholesterol,LBDLDL,biochemistry,heart
+C-peptide: SI,LBXCPSI,biochemistry,metabolic
+Glycohemoglobin,LBXGH,biochemistry,metabolic
+"Glucose, plasma",LBXGLU,biochemistry,metabolic
+Homocysteine,LBXHCY,biochemistry,heart
+Insulin,LBXIN,hormone,metabolic
+Cholesterol,LBXSCH,biochemistry,heart
+"Glucose, serum",LBXSGL,biochemistry,metabolic
+Triglycerides,LBXSTR,biochemistry,heart
+Total Cholesterol,LBXTC,biochemistry,heart
+Triglyceride,LBXTR,biochemistry,heart
+White blood cell count,LBXWBCSI,blood,immunological
+Methylmalonic acid,LBXMMA,biochemistry,nutrition
+Cond 4 Trial 1 Failure Time,BAXFTC41,physical functioning,physical functioning
+Cond 4 Trial 2 Failure Time,BAXFTC42,physical functioning,physical functioning
+Cond 1 Trial 1 Feet together eyes open,BAXPFC11,physical functioning,physical functioning
+Cond 2 Trial 1 Feet together eyes closed,BAXPFC21,physical functioning,physical functioning
+Cond 3 Trial 1 Foam Pad Eyes Open,BAXPFC31,physical functioning,physical functioning
+Cond 4 Trial 1 Foam Pad Eyes Closed,BAXPFC41,physical functioning,physical functioning
+Cond 4 Trial 2 Foam Pad Eyes Closed,BAXPFC42,physical functioning,physical functioning
+Arm Circumference (cm),BMXARMC,body measures,body measures
+Upper Arm Length (cm),BMXARML,body measures,body measures
+MIL: maximum inflation levels (mm Hg),BPXML1,blood pressure,blood pressure
+Estimated VO2max (ml/kg/min),CVDESVO2,physical fitness,physical fitness
+Calculated DO for femur,DXAFMRD0,body measures,body measures
+Calculated K for femur,DXAFMRK,body measures,body measures
+Femur scan status,DXAFMRST,body measures,body measures
+Calculated D0 for spine,DXASPND0,body measures,body measures
+Calculated K for spine,DXASPNK,body measures,body measures
+Spine scan status,DXASPNST,body measures,body measures
+Total femur BMD invalidity code,DXXFMBCC,body measures,body measures
+Intertrochanter area,DXXINA,body measures,body measures
+Intertrochanter BMC,DXXINBMC,body measures,body measures
+Intertrochanter BMD,DXXINBMD,body measures,body measures
+L1 area,DXXL1A,body measures,body measures
+L1 BMC,DXXL1BMC,body measures,body measures
+L1 BMD,DXXL1BMD,body measures,body measures
+L2 area,DXXL2A,body measures,body measures
+L2 BMD invalidity code,DXXL2BCC,body measures,body measures
+L2 BMC,DXXL2BMC,body measures,body measures
+L2 BMD,DXXL2BMD,body measures,body measures
+L3 area,DXXL3A,body measures,body measures
+L3 BMD invalidity code,DXXL3BCC,body measures,body measures
+L3 BMC,DXXL3BMC,body measures,body measures
+L3 BMD,DXXL3BMD,body measures,body measures
+L4 area,DXXL4A,body measures,body measures
+L4 BMD invalidity code,DXXL4BCC,body measures,body measures
+L4 BMC,DXXL4BMC,body measures,body measures
+L4 BMD,DXXL4BMD,body measures,body measures
+Femoral neck area,DXXNKA,body measures,body measures
+Femoral neck BMC,DXXNKBMC,body measures,body measures
+Femoral neck BMD,DXXNKBMD,body measures,body measures
+Total femur area,DXXOFA,body measures,body measures
+Total femur BMC,DXXOFBMC,body measures,body measures
+Total femur BMD,DXXOFBMD,body measures,body measures
+Total spine area,DXXOSA,body measures,body measures
+Total spine BMD invalidity code,DXXOSBCC,body measures,body measures
+Total spine BMC,DXXOSBMC,body measures,body measures
+Total spine BMD,DXXOSBMD,body measures,body measures
+Trochanter area,DXXTRA,body measures,body measures
+Trochanter BMC,DXXTRBMC,body measures,body measures
+Trochanter BMD,DXXTRBMD,body measures,body measures
+Ward's triangle area,DXXWDA,body measures,body measures
+Ward's triangle BMC,DXXWDBMC,body measures,body measures
+Ward's triangle BMD,DXXWDBMD,body measures,body measures
+"Mean, 2 reproducible FENO measures (ppb)",ENXMEAN,biochemistry,lung
+Direct HDL-Cholesterol (mg/dL),LBDHDD,biochemistry,heart
+Thyroid stimulating hormone (mIU/L),LBDTSH1S,hormone,hormone
+Apolipoprotein (B) (mg/dL),LBXAPB,biochemistry,heart
+Thyroglobulin antibodies (IU/mL),LBXATG,hormone,hormone
+Two Hour Glucose(OGTT) (mg/dL),LBXGLT,biochemistry,metabolic
+"Triiodothyronine (T3), free (pg/mL)",LBXT3F,hormone,hormone
+"Thyroxine, free (ng/dL)",LBXT4F,hormone,hormone
+Transferrin receptor (mg/L),LBXTFR,biochemistry,immunological
+Thyroglobulin (ng/mL),LBXTGN,hormone,hormone
+Thyroid peroxidase antibodies (IU/mL),LBXTPO,hormone,hormone
+Thyroid stimulating hormone (uIU/mL),LBXTSH1,hormone,hormone
+"Triiodothyronine (T3), total (ng/dL)",LBXTT3,hormone,hormone
+"Thyroxine, total (T4) (ug/dL)",LBXTT4,hormone,hormone
+Baseline Extrapolated Volume (mL),SPXNEV,spirometry,lung
+Baseline FEF 25-75% (mL/s),SPXNF257,spirometry,lung
+Baseline Forced Expiratory Time (s),SPXNFET,spirometry,lung
+Baseline FEV 1 (mL),SPXNFEV1,spirometry,lung
+Baseline FEV 3 (mL),SPXNFEV3,spirometry,lung
+Baseline FEV 0.5 (mL),SPXNFEV5,spirometry,lung
+Baseline FEV 6 (mL),SPXNFEV6,spirometry,lung
+Baseline FEV 0.75 (mL),SPXNFEV7,spirometry,lung
+Baseline FVC (mL),SPXNFVC,spirometry,lung
+Baseline PEF (mL/s),SPXNPEF,spirometry,lung
+"Albumin, urine (mg/L)",URXUMS,biochemistry,kidney

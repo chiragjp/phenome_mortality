@@ -24,8 +24,7 @@ In the `nhanes_schema_merged_all_031816.Rdata` file you can load with the Dropbo
 
 ```{r}
 #load('~/Dropbox (RagGroup)/RagGroup Team Folder/nhanes_merged_data/nhanes_schema_merged_all_031816.Rdata')
-#load('~/src/phenome-mortality/nhanes_schema_merged_all_031816.Rdata')
-load('~/Dropbox/NHANES/nhanes_schema_merged_all_031816.Rdata')
+load('~/src/phenome-mortality/nhanes_schema_merged_all_031816.Rdata')
 
 MainTable <- bigData
 VarDescription <- tabDesc
@@ -55,27 +54,26 @@ Do a quick table to see the variable distribution, there are about 1,484 unique 
 head( table(VarDescription.2$var, VarDescription.2$series) ) # Variables by cohort year,
 dim( table(VarDescription.2$var, VarDescription.2$series) )    # 1,484 unique variables.
 
-beginWith <- c('LBX', 'LBD', 'URX', 'URD', 'DXX', 'MGX', 'MSD', 'MSX', 'SPX', 'DEX', 'MSYS', 'MDIS', 'BIX', 'BAX', 'CVD', 'BPX', 'BMX') # variables that were continuous and of clinical relevance
+beginWith <- c('LBX', 'LBD', 'URX', 'URD', 'DXX', 'MGX', 'MSD', 'MSX', 'SPX', 'DEX', 'MSYS', 'MDIS', 'BAX', 'CVD', 'BPX', 'BMX') # variables that were continuous and of clinical relevance, previously had 'BIX'
 VarDescription.2$first3 <- substr(VarDescription.2$var, 1, 3)
 VarDescription.2$first4 <- substr(VarDescription.2$var, 1, 4)
 VarDescription.3 <- VarDescription.2[VarDescription.2$first3 %in% beginWith |
                                      VarDescription.2$first4 %in% beginWith, ]
 
 head( table(VarDescription.3$var, VarDescription.3$series) ) # Variables by cohort year,
-dim( table(VarDescription.3$var, VarDescription.3$series) )  # 439 unique variables.
+dim( table(VarDescription.3$var, VarDescription.3$series) )  # 339 unique variables.
 ```
 
-Choose phenotypic markers that are present >= 3 surveys. Since some variables appear more than once in a given survey year we map the counts > 1 to just 1 to indicate presence then sum across the rows to find unique counts across survey years. The counts >= 3 are the variables of interest and we display the original table subsetted as a sanity check. Our final list of variables present in >= 3 surveys is 281.
+Choose phenotypic markers that are present >= 3 surveys. Since some variables appear more than once in a given survey year we map the counts > 1 to just 1 to indicate presence then sum across the rows to find unique counts across survey years. The counts >= 3 are the variables of interest and we display the original table subsetted as a sanity check. Our final list of variables present in >= 3 surveys is 181.
 
 ```{r}
 VarDescription.3.table <- table(VarDescription.3$var, VarDescription.3$series)
-map <- t( apply(VarDescription.3.table, 1, function(x) {ifelse(x >= 1, 1, 0)}) )
-FinalVariableList <- rownames(map)[apply(map, 1, sum) >= 3]
-rm(map) # cleanup to avoid confusion after use since variable name non-descriptive
+VarSurveyCounts <- t( apply(VarDescription.3.table, 1, function(x) {ifelse(x >= 1, 1, 0)}) )
+FinalVariableList <- rownames(VarSurveyCounts)[apply(VarSurveyCounts, 1, sum) >= 3]
 
 head( VarDescription.3.table[rownames(VarDescription.3.table) %in% FinalVariableList, ] ) # sanity check if wanted
 
-length(FinalVariableList) # final list of variables is 281
+length(FinalVariableList) # final list of variables is 181
 ```
 
 Some data points are duplicates (e.g., SI measurements). Find all the lab measures that end in SI suffix and store in `SIduplicates` as the search space. Find variables that exist in whole text plus again with SI appended to the end and log it in new list while removing from the `FinalVariableList`.
@@ -86,7 +84,7 @@ Also remove the redundant 1/Creatinine measure (`LBXSCRINV`).
 SIduplicates <- FinalVariableList[grep("SI$", FinalVariableList)]
 length(SIduplicates) # 41 potential duplicates
 
-SIduplicates.removed <- c()
+SIduplicates.removed <- c("URXCRS", "URXUMS") # manually add these measures
 
 for (i in SIduplicates) {
   root <- substr(i, 1, nchar(i)-2) # variable w/o SI suffix
@@ -106,7 +104,7 @@ FinalVariableList <- FinalVariableList[!(FinalVariableList %in% SIduplicates.rem
 
 FinalVariableList <- FinalVariableList[FinalVariableList != "LBXSCRINV"] # remove the redundant inverted creatinine measure
 
-length(FinalVariableList) # final variable list is now 256
+length(FinalVariableList) # final variable list is now 154
 ```
 
 Before we go further let's review our chosen variables.
@@ -215,22 +213,30 @@ MainTable.cleaned <- cbind(MainTable.2[, !colnames(MainTable.2) %in% colnames(Ma
 Some heatmap action for correlation of the quantitative variables...this is time-intenseive, don't always run so set to `eval=FALSE` by default.
 
 ```{r eval=FALSE}
-sort(table(unlist(lapply(MainTable.cleaned[FinalVariableList], class))), decreasing=T)
-#final.numerics <- names(which(unlist(lapply(MainTable.cleaned[FinalVariableList], is.numeric)) == TRUE))
 final.numeric.names <- colnames(MainTable.2)[transform.cols]
 
 FinalVariableList.heat.raw <- matrix(NA, nrow=length(transform.cols), ncol=length(transform.cols), dimnames=list(final.numeric.names, final.numeric.names))
 FinalVariableList.heat.log <- matrix(NA, nrow=length(transform.cols), ncol=length(transform.cols), dimnames=list(final.numeric.names, final.numeric.names))
 
 for (i in 1:length(final.numeric.names)) {
-  for (j in i:length(final.numeric.names)) {
-    FinalVariableList.heat.raw[i, j] <- cor(na.omit(MainTable.2[final.numeric.names[i]]), na.omit(MainTable.2[final.numeric.names[j]]), use="everything", method="spearman")
+  for (j in 1:length(final.numeric.names)) {
+    #print(paste(i, j))
     
-    FinalVariableList.heat.log[i, j] <- cor(MainTable.cleaned[final.numeric.names[i]], MainTable.cleaned[final.numeric.names[j]], use="complete", method="spearman")
+    #tmp <- cbind( MainTable.2[final.numeric.names[i]], MainTable.2[final.numeric.names[j]] )
+    #tmp <- tmp[complete.cases(tmp), ]
+    #FinalVariableList.heat.raw[i, j] <- cor(tmp[, 1], tmp[, 2], use="everything", method="spearman")
+    
+    tmp <- cbind( MainTable.cleaned[final.numeric.names[i]], MainTable.cleaned[final.numeric.names[j]] )
+    tmp <- tmp[complete.cases(tmp), ]
+    FinalVariableList.heat.log[i, j] <- cor(tmp[, 1], tmp[, 2], use="everything", method="spearman")
   }
-  
-  print(i)
 }
+```
+
+```{r}
+library(RColorBrewer)
+#heatmap(FinalVariableList.heat.log, Rowv=NA, Colv=NA, col=colorRampPalette(c("white", "red"))(n=100), scale='none')
+heatmap(FinalVariableList.heat.log, col=colorRampPalette(c("white", "red"))(n=100), scale='none')
 ```
 
 Sample analysis below.
@@ -546,13 +552,13 @@ for (i in 1:length(AvailableSeries)) {
   cat("Now analyzing", useTheseSeries[i], "series.\n")
   
   # dsn
-  assign( paste0("dsn.all.", i),       subset(dsn.all,       SDDSRVYR == AvailableSeries[i]))
-  assign( paste0("dsn.m.", i),         subset(dsn.m,         SDDSRVYR == AvailableSeries[i]))
-  assign( paste0("dsn.f.", i),         subset(dsn.f,         SDDSRVYR == AvailableSeries[i]))
-  assign( paste0("dsn.pir.above.", i), subset(dsn.pir.above, SDDSRVYR == AvailableSeries[i]))
-  assign( paste0("dsn.pir.below.", i), subset(dsn.pir.below, SDDSRVYR == AvailableSeries[i]))
-  assign( paste0("dsn.age.above.", i), subset(dsn.age.above, SDDSRVYR == AvailableSeries[i]))
-  assign( paste0("dsn.age.below.", i), subset(dsn.age.below, SDDSRVYR == AvailableSeries[i]))
+  assign( paste0("dsn.all.", i),        subset(dsn.all,        SDDSRVYR == AvailableSeries[i]))
+  assign( paste0("dsn.m.", i),          subset(dsn.m,          SDDSRVYR == AvailableSeries[i]))
+  assign( paste0("dsn.f.", i),          subset(dsn.f,          SDDSRVYR == AvailableSeries[i]))
+  assign( paste0("dsn.pir.above.", i),  subset(dsn.pir.above,  SDDSRVYR == AvailableSeries[i]))
+  assign( paste0("dsn.pir.below.", i),  subset(dsn.pir.below,  SDDSRVYR == AvailableSeries[i]))
+  assign( paste0("dsn.age.above.", i),  subset(dsn.age.above,  SDDSRVYR == AvailableSeries[i]))
+  assign( paste0("dsn.age.below.", i),  subset(dsn.age.below,  SDDSRVYR == AvailableSeries[i]))
   assign( paste0("dsn.race.latin.", i), subset(dsn.race.latin, SDDSRVYR == AvailableSeries[i]))
   assign( paste0("dsn.race.white.", i), subset(dsn.race.white, SDDSRVYR == AvailableSeries[i]))
   assign( paste0("dsn.race.black.", i), subset(dsn.race.black, SDDSRVYR == AvailableSeries[i]))
@@ -580,16 +586,16 @@ for (i in 1:length(AvailableSeries)) {
   assign( paste0("surv.race.white.coef.", i),   lapply(eval(parse(text=paste0("surv.race.white.raw.", i))), function(x) { coef(summary(x)) }) ) # list of df
   assign( paste0("surv.race.black.coef.", i),   lapply(eval(parse(text=paste0("surv.race.black.raw.", i))), function(x) { coef(summary(x)) }) ) # list of df
   
-  assign( paste0("surv.all.", i), annotate(xwas2df(eval(parse(text=paste0("surv.all.coef.", i))))) )
-  assign( paste0("surv.m.", i),   annotate(xwas2df(eval(parse(text=paste0("surv.m.coef.", i))))) )
-  assign( paste0("surv.f.", i),   annotate(xwas2df(eval(parse(text=paste0("surv.f.coef.", i))))) )
-  assign( paste0("surv.pir.above.", i),   annotate(xwas2df(eval(parse(text=paste0("surv.pir.above.coef.", i))))) )
-  assign( paste0("surv.pir.below.", i),   annotate(xwas2df(eval(parse(text=paste0("surv.pir.below.coef.", i))))) )
-  assign( paste0("surv.age.above.", i),   annotate(xwas2df(eval(parse(text=paste0("surv.age.above.coef.", i))))) )
-  assign( paste0("surv.age.below.", i),   annotate(xwas2df(eval(parse(text=paste0("surv.age.below.coef.", i))))) )
-  assign( paste0("surv.race.latin.", i),   annotate(xwas2df(eval(parse(text=paste0("surv.race.latin.coef.", i))))) )
-  assign( paste0("surv.race.white.", i),   annotate(xwas2df(eval(parse(text=paste0("surv.race.white.coef.", i))))) )
-  assign( paste0("surv.race.black.", i),   annotate(xwas2df(eval(parse(text=paste0("surv.race.black.coef.", i))))) )
+  assign( paste0("surv.all.", i),        annotate(xwas2df(eval(parse(text=paste0("surv.all.coef.", i))))) )
+  assign( paste0("surv.m.", i),          annotate(xwas2df(eval(parse(text=paste0("surv.m.coef.", i))))) )
+  assign( paste0("surv.f.", i),          annotate(xwas2df(eval(parse(text=paste0("surv.f.coef.", i))))) )
+  assign( paste0("surv.pir.above.", i),  annotate(xwas2df(eval(parse(text=paste0("surv.pir.above.coef.", i))))) )
+  assign( paste0("surv.pir.below.", i),  annotate(xwas2df(eval(parse(text=paste0("surv.pir.below.coef.", i))))) )
+  assign( paste0("surv.age.above.", i),  annotate(xwas2df(eval(parse(text=paste0("surv.age.above.coef.", i))))) )
+  assign( paste0("surv.age.below.", i),  annotate(xwas2df(eval(parse(text=paste0("surv.age.below.coef.", i))))) )
+  assign( paste0("surv.race.latin.", i), annotate(xwas2df(eval(parse(text=paste0("surv.race.latin.coef.", i))))) )
+  assign( paste0("surv.race.white.", i), annotate(xwas2df(eval(parse(text=paste0("surv.race.white.coef.", i))))) )
+  assign( paste0("surv.race.black.", i), annotate(xwas2df(eval(parse(text=paste0("surv.race.black.coef.", i))))) )
   
   assign( paste0("surv.all.sig.", i), subset(eval(parse(text=paste0("surv.all.", i))), q < 0.05) )
   assign( paste0("surv.all.sig.", i), eval(parse(text=paste0("surv.all.sig.", i)))[order(eval(parse(text=paste0("surv.all.sig.", i)))$beta), ] )
@@ -622,19 +628,6 @@ for (i in 1:length(AvailableSeries)) {
   assign( paste0("surv.race.black.sig.", i), eval(parse(text=paste0("surv.race.black.sig.", i)))[order(eval(parse(text=paste0("surv.race.black.sig.", i)))$beta), ] )
   
 }
-```
-
-Volcano plot to visualize comorbidities that are considered significant in some scenario or another.
-
-```{r}
-plot(surv.all$beta, -log10(surv.all$p), xlab="Association Size", ylab=expression(-log[10]*'(p-value)'), pch=20, xlim=c(-3,3), frame.plot=F)
-points(surv.all.sig$beta, -log10(surv.all.sig$p), col="red", pch=20)
-
-plot(surv.m$beta, -log10(surv.m$p), xlab="Association Size", ylab=expression(-log[10]*'(p-value)'), pch=20, xlim=c(-3,3), frame.plot=F)
-points(surv.m.sig$beta, -log10(surv.m.sig$p), col="red", pch=20)
-
-plot(surv.f$beta, -log10(surv.f$p), xlab="Association Size", ylab=expression(-log[10]*'(p-value)'), pch=20, xlim=c(-3,3), frame.plot=F)
-points(surv.f.sig$beta, -log10(surv.f.sig$p), col="red", pch=20)
 ```
 
 Do `metafor` analysis but first create some wrapper functions to process each substratified analysis.
@@ -679,11 +672,11 @@ xmeta2df <- function(x) {
   
   for (i in x) {
     ### metafor extraction
-    # overall effect, lower CI 95%, upper CI 95%, p-value, tau2, I2
-    meta.final <- rbind(meta.final, c(i$b, i$ci.lb, i$ci.ub, i$pval, i$I2))
+    # overall effect, lower CI 95%, upper CI 95%, p-value, tau2, I2, k
+    meta.final <- rbind(meta.final, c(i$b, i$ci.lb, i$ci.ub, i$pval, i$I2, i$k))
   }
   rownames(meta.final) <- names(x)
-  colnames(meta.final) <- c("Effect", "Lower", "Upper", "p", "I2") # label metafor analysis
+  colnames(meta.final) <- c("Effect", "Lower", "Upper", "p", "I2", "k") # label metafor analysis
   
   meta.final[, c("Effect")] <- exp(meta.final[, c("Effect")]) # convert beta coefficients to OR
   meta.final[, c("Lower")] <- exp(meta.final[, c("Lower")]) # convert lower beta estimate to OR
@@ -694,11 +687,17 @@ xmeta2df <- function(x) {
   meta.final <- merge(meta.final, VarDescription[match(unique(VarDescription$var), VarDescription$var), c("var", "var_desc")], by.x="row.names", by.y="var")
   rownames(meta.final) <- meta.final$Row.names
   meta.final$Row.names <- NULL
-  meta.final <- meta.final[order(meta.final$Effect), ] # increasing OR
   
   meta.final$CI <- paste(meta.final$Lower, meta.final$Upper, sep=", ")
   
-  return(meta.final[, c("var_desc", "Effect", "CI", "p", "I2")]) # reorder df as it's returned
+  Surveys <- as.data.frame(apply(VarSurveyCounts, 1, sum))
+  names(Surveys) <- "Surveys"
+  meta.final <- merge(meta.final, Surveys, by="row.names", all.x=T)
+  rownames(meta.final) <- meta.final$Row.names
+  meta.final$Row.names <- NULL
+  meta.final <- meta.final[order(meta.final$Effect), ] # increasing OR
+  
+  return(meta.final[, c("var_desc", "Effect", "CI", "p", "I2", "k", "Surveys")]) # reorder df as it's returned
 }
 ```
 
@@ -717,6 +716,9 @@ surv.f.meta.raw <- xmeta("surv.f.sig.")
 surv.f.meta     <- xmeta2df(surv.f.meta.raw)
 surv.f.meta.sig <- surv.f.meta[surv.f.meta$p < 0.05, ]
 
+View(surv.m.meta.sig[!(row.names(surv.m.meta.sig) %in% row.names(surv.f.meta.sig)), ]) # vars UNIQUE to men
+View(surv.f.meta.sig[!(row.names(surv.f.meta.sig) %in% row.names(surv.m.meta.sig)), ]) # vars UNIQUE to women
+
 surv.age.above.meta.raw <- xmeta("surv.age.above.sig.")
 surv.age.above.meta     <- xmeta2df(surv.age.above.meta.raw)
 surv.age.above.meta.sig <- surv.age.above.meta[surv.age.above.meta$p < 0.05, ]
@@ -724,12 +726,18 @@ surv.age.below.meta.raw <- xmeta("surv.age.below.sig.")
 surv.age.below.meta     <- xmeta2df(surv.age.below.meta.raw)
 surv.age.below.meta.sig <- surv.age.below.meta[surv.age.below.meta$p < 0.05, ]
 
+View(surv.age.above.meta.sig[!(row.names(surv.age.above.meta.sig) %in% row.names(surv.age.below.meta.sig)), ]) # vars UNIQUE to old
+View(surv.age.below.meta.sig[!(row.names(surv.age.below.meta.sig) %in% row.names(surv.age.above.meta.sig)), ]) # vars UNIQUE to young
+
 surv.pir.above.meta.raw <- xmeta("surv.pir.above.sig.")
 surv.pir.above.meta     <- xmeta2df(surv.pir.above.meta.raw)
 surv.pir.above.meta.sig <- surv.pir.above.meta[surv.pir.above.meta$p < 0.05, ]
 surv.pir.below.meta.raw <- xmeta("surv.pir.below.sig.")
 surv.pir.below.meta     <- xmeta2df(surv.pir.below.meta.raw)
 surv.pir.below.meta.sig <- surv.pir.below.meta[surv.pir.below.meta$p < 0.05, ]
+
+View(surv.pir.above.meta.sig[!(row.names(surv.pir.above.meta.sig) %in% row.names(surv.pir.below.meta.sig)), ]) # vars UNIQUE to rich
+View(surv.pir.below.meta.sig[!(row.names(surv.pir.below.meta.sig) %in% row.names(surv.pir.above.meta.sig)), ]) # vars UNIQUE to poor
 
 surv.race.white.meta.raw <- xmeta("surv.race.white.sig.")
 surv.race.white.meta     <- xmeta2df(surv.race.white.meta.raw)
@@ -740,6 +748,10 @@ surv.race.black.meta.sig <- surv.race.black.meta[surv.race.black.meta$p < 0.05, 
 surv.race.latin.meta.raw <- xmeta("surv.race.latin.sig.")
 surv.race.latin.meta     <- xmeta2df(surv.race.latin.meta.raw)
 surv.race.latin.meta.sig <- surv.race.latin.meta[surv.race.latin.meta$p < 0.05, ]
+
+View(surv.race.white.meta.sig[!(row.names(surv.race.white.meta.sig) %in% c(row.names(surv.race.black.meta.sig), row.names(surv.race.latin.meta.sig))), ]) # vars UNIQUE to white
+View(surv.race.black.meta.sig[!(row.names(surv.race.black.meta.sig) %in% c(row.names(surv.race.white.meta.sig), row.names(surv.race.latin.meta.sig))), ]) # vars UNIQUE to black
+View(surv.race.latin.meta.sig[!(row.names(surv.race.latin.meta.sig) %in% c(row.names(surv.race.white.meta.sig), row.names(surv.race.black.meta.sig))), ]) # vars UNIQUE to latin
 ```
 
 Create UpSetR visualizations for comorbidities across time cohorts, highlights those that appear significant in at least in 3+ (half) of the time cohorts as well as in the total analysis.
@@ -851,16 +863,15 @@ upset(com.df.all, sets=c("1999-2010", rev(AvailableSeries)), keep.order=T, order
        #set.metadata=list(data=usr.lbl.all, plots=list(list(type="text", column="CoM", assign=10))),
       queries=list(
                    list(query=intersects, params=list("1999-2010", "1999-2000", "2001-2002", "2003-2004", "2005-2006", "2007-2008", "2009-2010"), color="red", active=T),
-                   list(query=intersects, params=list("1999-2010", "1999-2000", "2001-2002", "2003-2004", "2005-2006"), color="red", active=T),
                    list(query=intersects, params=list("1999-2010", "1999-2000", "2001-2002", "2003-2004", "2007-2008", "2009-2010"), color="red", active=T),
                    list(query=intersects, params=list("1999-2010", "1999-2000", "2001-2002", "2003-2004"), color="red", active=T),
+                   list(query=intersects, params=list("1999-2010", "1999-2000", "2001-2002", "2003-2004", "2005-2006"), color="red", active=T),
                    list(query=intersects, params=list("1999-2010", "1999-2000", "2001-2002", "2003-2004", "2007-2008"), color="red", active=T),
-                   list(query=intersects, params=list("1999-2010", "2001-2002", "2003-2004", "2007-2008", "2009-2010"), color="red", active=T),
                    list(query=intersects, params=list("1999-2010", "2001-2002", "2003-2004", "2005-2006", "2007-2008"), color="red", active=T),
                    list(query=intersects, params=list("1999-2010", "1999-2000", "2001-2002", "2003-2004", "2005-2006", "2007-2008"), color="red", active=T),
+                   list(query=intersects, params=list("1999-2010", "1999-2000", "2003-2004", "2009-2010"), color="red", active=T),
                    list(query=intersects, params=list("1999-2010", "2003-2004", "2007-2008", "2009-2010"), color="red", active=T),
-                   list(query=intersects, params=list("1999-2010", "2005-2006", "2007-2008", "2009-2010"), color="red", active=T),
-                   list(query=intersects, params=list("1999-2010", "2001-2002", "2003-2004", "2005-2006", "2007-2008", "2009-2010"), color="red", active=T)
+                   list(query=intersects, params=list("1999-2010", "2001-2002", "2003-2004", "2007-2008", "2009-2010"), color="red", active=T)
                   )
 )
 
@@ -870,14 +881,14 @@ upset(com.df.m,   sets=c("1999-2010", rev(AvailableSeries)), keep.order=T, order
                  list(query=intersects, params=list("1999-2010", "1999-2000", "2001-2002", "2003-2004", "2005-2006", "2007-2008", "2009-2010"), color="red", active=T),
                  list(query=intersects, params=list("1999-2010", "2001-2002", "2003-2004", "2005-2006", "2007-2008", "2009-2010"), color="red", active=T),
                  list(query=intersects, params=list("1999-2010", "1999-2000", "2001-2002", "2003-2004", "2009-2010"), color="red", active=T),
-                 list(query=intersects, params=list("1999-2010", "2001-2002", "2003-2004", "2007-2008", "2009-2010"), color="red", active=T),
                  list(query=intersects, params=list("1999-2010", "1999-2000", "2001-2002", "2003-2004"), color="red", active=T),
                  list(query=intersects, params=list("1999-2010", "1999-2000", "2001-2002", "2003-2004", "2005-2006"), color="red", active=T),
                  list(query=intersects, params=list("1999-2010", "2001-2002", "2003-2004", "2007-2008"), color="red", active=T),
                  list(query=intersects, params=list("1999-2010", "2001-2002", "2003-2004", "2005-2006", "2007-2008"), color="red", active=T),
                  list(query=intersects, params=list("1999-2010", "1999-2000", "2001-2002", "2003-2004", "2005-2006", "2009-2010"), color="red", active=T),
                  list(query=intersects, params=list("1999-2010", "2001-2002", "2007-2008", "2009-2010"), color="red", active=T),
-                 list(query=intersects, params=list("1999-2010", "2005-2006", "2007-2008", "2009-2010"), color="red", active=T)
+                 list(query=intersects, params=list("1999-2010", "2001-2002", "2003-2004", "2007-2008", "2009-2010"), color="red", active=T),
+                 list(query=intersects, params=list("1999-2010", "1999-2000", "2001-2002", "2003-2004", "2007-2008", "2009-2010"), color="red", active=T)
                 ) 
 )
 
@@ -885,34 +896,21 @@ upset(com.df.f,   sets=c("1999-2010", rev(AvailableSeries)), keep.order=T, order
       #set.metadata=list(data=usr.lbl.all, plots=list(list(type="text", column="CoM", assign=5))), 
     queries=list(
                   list(query=intersects, params=list("1999-2010", "1999-2000", "2001-2002", "2003-2004", "2005-2006", "2007-2008", "2009-2010"), color="red", active=T),
+                  list(query=intersects, params=list("1999-2010", "1999-2000", "2001-2002", "2003-2004"), color="red", active=T),
+                  list(query=intersects, params=list("1999-2010", "1999-2000", "2001-2002", "2003-2004", "2005-2006"), color="red", active=T),
+                  list(query=intersects, params=list("1999-2010", "1999-2000", "2001-2002", "2003-2004", "2005-2006", "2007-2008"), color="red", active=T),
+                  list(query=intersects, params=list("1999-2010", "1999-2000", "2001-2002", "2005-2006"), color="red", active=T),
+                  list(query=intersects, params=list("1999-2010", "2001-2002", "2003-2004", "2005-2006"), color="red", active=T),
                   list(query=intersects, params=list("1999-2010", "1999-2000", "2001-2002", "2003-2004", "2007-2008", "2009-2010"), color="red", active=T),
                   list(query=intersects, params=list("1999-2010", "2001-2002", "2003-2004", "2007-2008", "2009-2010"), color="red", active=T),
-                  list(query=intersects, params=list("1999-2010", "2001-2002", "2003-2004", "2007-2008", "2009-2010"), color="red", active=T),
-                  list(query=intersects, params=list("1999-2010", "2001-2002", "2003-2004", "2009-2010"), color="red", active=T),
-                  list(query=intersects, params=list("1999-2010", "1999-2000", "2001-2002", "2003-2004", "2005-2006", "2007-2008"), color="red", active=T),
-                  list(query=intersects, params=list("1999-2010", "2001-2002", "2003-2004", "2005-2006", "2007-2008"), color="red", active=T),
-                  list(query=intersects, params=list("1999-2010", "1999-2000", "2003-2004", "2007-2008"), color="red", active=T),
-                  list(query=intersects, params=list("1999-2010", "1999-2000", "2001-2002", "2003-2004", "2005-2006"), color="red", active=T),
-                  list(query=intersects, params=list("1999-2010", "2001-2002", "2003-2004", "2005-2006"), color="red", active=T),
-                  list(query=intersects, params=list("1999-2010", "2003-2004", "2007-2008", "2009-2010"), color="red", active=T)
+                  list(query=intersects, params=list("1999-2010", "2001-2002", "2003-2004", "2009-2010"), color="red", active=T)
                 )
 )
 
 upset(com.df.pir.above, sets=c("1999-2010", rev(AvailableSeries)), keep.order=T, order.by="freq", sets.x.label="Significant Comorbidities \n (q < 0.05)", mainbar.y.label="Unique Comorbidities \n (Above Poverty)",
       queries=list(
                   list(query=intersects, params=list("1999-2010", "1999-2000", "2001-2002", "2003-2004", "2005-2006", "2007-2008", "2009-2010"), color="red", active=T),
-                  list(query=intersects, params=list("1999-2010", "1999-2000", "2001-2002", "2003-2004", "2007-2008", "2009-2010"), color="red", active=T),
-                  list(query=intersects, params=list("1999-2010", "1999-2000", "2001-2002", "2003-2004"), color="red", active=T), 
-                  list(query=intersects, params=list("1999-2010", "1999-2000", "2001-2002", "2003-2004", "2005-2006"), color="red", active=T),
-                  list(query=intersects, params=list("1999-2010", "1999-2000", "2001-2002", "2003-2004", "2007-2008"), color="red", active=T),
-                  list(query=intersects, params=list("1999-2010", "1999-2000", "2001-2002", "2003-2004", "2005-2006", "2009-2010"), color="red", active=T),
-                  list(query=intersects, params=list("1999-2010", "1999-2000", "2003-2004", "2005-2006", "2007-2008", "2009-2010"), color="red", active=T),
-                  list(query=intersects, params=list("1999-2010", "2001-2002", "2003-2004", "2005-2006"), color="red", active=T),
-                  list(query=intersects, params=list("1999-2010", "2001-2002", "2003-2004", "2005-2006", "2007-2008"), color="red", active=T),
-                  list(query=intersects, params=list("1999-2010", "1999-2000", "2003-2004", "2009-2010"), color="red", active=T),
-                  list(query=intersects, params=list("1999-2010", "2001-2002", "2003-2004", "2005-2006", "2009-2010"), color="red", active=T),
-                  list(query=intersects, params=list("1999-2010", "2001-2002", "2003-2004", "2007-2008", "2009-2010"), color="red", active=T),
-                  list(query=intersects, params=list("1999-2010", "2005-2006", "2007-2008", "2009-2010"), color="red", active=T)
+                  
                 )
 )
 
@@ -1115,6 +1113,67 @@ print(baseformula) # our final model
 coxph(baseformula, data=dsn.all$variables, weights=1/dsn.all$allprob[, 1])  # changed to coxph
 
 weightedr2( coxph(baseformula, data=dsn.all$variables, weights=1/dsn.all$allprob[, 1]) )
+```
+
+# Kaplan Meier Curves - All
+
+```{r} 
+plot(1, type="n", xlab="Years", xlim=c(0, 156), ylab="Survival Probability", ylim=c(0.75, 1.00), las=1, main="All Cause - No Filter", frame.plot=F, axes=F)
+axis(1, at=seq(0, 156, by=12), labels=c(0:13))
+axis(2, at=seq(0.75, 1.00, by=0.05), las=1)
+lapply(surv.all.raw, function(x) { lines(survfit(x, se.fit=F), col=rgb(0, 0, 0, 0.25)) } ) # plot all
+```
+
+```{r}
+plot(1, type="n", xlab="Years", xlim=c(0, 156), ylab="Survival Probability", ylim=c(0.94, 1.00), las=1, main="All Cause", frame.plot=F, axes=F)
+axis(1, at=seq(0, 156, by=12), labels=c(0:13))
+axis(2, at=seq(0.94, 1.00, by=0.01), las=1)
+lapply(surv.all.raw[row.names(surv.all.meta.sig)], function(x) { lines(survfit(x, se.fit=F), col=rgb(1, 0, 0, 0.25)) } )
+```
+
+# Kaplan Meier Curves - Gender
+
+```{r}
+plot(1, type="n", xlab="Years", xlim=c(0, 156), ylab="Survival Probability", ylim=c(0.94, 1.00), las=1, main="Gender Survival Curve", frame.plot=F, axes=F)
+axis(1, at=seq(0, 156, by=12), labels=c(0:13))
+axis(2, at=seq(0.94, 1.00, by=0.01), las=1)
+lapply(surv.m.raw[row.names(surv.m.meta.sig)], function(x) { lines(survfit(x, se.fit=F), col=rgb(0, 0, 1, 0.25)) } )
+lapply(surv.f.raw[row.names(surv.f.meta.sig)], function(x) { lines(survfit(x, se.fit=F), col=rgb(1, 0, 0, 0.25)) } )
+legend("bottomleft", c("Male", "Female"), lty=c(1, 1), col=c("blue", "red"), bty='n')
+```
+
+# Kaplan Meier Curves - Age
+
+```{r}
+plot(1, type="n", xlab="Years", xlim=c(0, 156), ylab="Survival Probability", ylim=c(0.5, 1.00), las=1, main="Age Survival Curve", frame.plot=F, axes=F)
+axis(1, at=seq(0, 156, by=12), labels=c(0:13))
+axis(2, at=seq(0.5, 1.00, by=0.1), las=1)
+lapply(surv.age.above.raw[row.names(surv.age.above.meta.sig)], function(x) { lines(survfit(x, se.fit=F), col=rgb(1, 0, 0, 0.25)) } )
+lapply(surv.age.below.raw[row.names(surv.age.below.meta.sig)], function(x) { lines(survfit(x, se.fit=F), col=rgb(0, 0, 1, 0.25)) } )
+legend("bottomleft", c("Older than 65", "Younger than 65"), lty=c(1, 1), col=c("red", "blue"), bty='n')
+```
+
+# Kaplan Meier Curves - Income
+
+```{r}
+plot(1, type="n", xlab="Years", xlim=c(0, 156), ylab="Survival Probability", ylim=c(0.90, 1.00), las=1, main="Poverty-Income Ratio Survival Curve", frame.plot=F, axes=F)
+axis(1, at=seq(0, 156, by=12), label=c(0:13))
+axis(2, at=seq(0.90, 1.00, by=0.02), las=1)
+lapply(surv.pir.above.raw[row.names(surv.pir.above.meta.sig)], function(x) { lines(survfit(x, se.fit=F), col=rgb(1, 0, 0, 0.25)) } )
+lapply(surv.pir.below.raw[row.names(surv.pir.below.meta.sig)], function(x) { lines(survfit(x, se.fit=F), col=rgb(0, 0, 1, 0.25)) } )
+legend("bottomleft", c("Above poverty-income ratio", "Below poverty-income ratio"), lty=c(1, 1), col=c("red", "blue"), bty='n')
+```
+
+# Kaplan Meier Curves - Race
+
+```{r}
+plot(1, type="n", xlab="Years", xlim=c(0, 156), ylab="Survival Probability", ylim=c(0.94, 1.00), las=1, main="Race Survival Curve", frame.plot=F, axes=F)
+axis(1, at=seq(0, 156, by=12), labels=c(0:13))
+axis(2, at=seq(0.94, 1.00, by=0.01), las=1)
+lapply(surv.race.white.raw[row.names(surv.race.white.meta.sig)], function(x) { lines(survfit(x, se.fit=F), col=rgb(1, 0, 0, 0.25)) } )
+lapply(surv.race.black.raw[row.names(surv.race.black.meta.sig)], function(x) { lines(survfit(x, se.fit=F), col=rgb(0, 1, 0, 0.25)) } )
+lapply(surv.race.latin.raw[row.names(surv.race.latin.meta.sig)], function(x) { lines(survfit(x, se.fit=F), col=rgb(0, 0, 1, 0.25)) } )
+legend("bottomleft", c("White", "Black", "Mexican-American"), lty=c(1, 1), col=c("red", "green", "blue"), bty='n')
 ```
 
 We need to visualize these effects by gender.
