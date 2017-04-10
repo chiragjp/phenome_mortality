@@ -1,6 +1,6 @@
 ---
 title: "analysis.R"
-date: "January 17, 2017"
+date: "April 9, 2017"
 output: html_document
 ---
 
@@ -13,9 +13,8 @@ This is code for mortality analysis on the NHANES data. First load all library d
 ```{r}
 library(survival)   # required for coxph function
 library(survey)     # required for stratified analysis
-library(polycor)    # ???
-library(Hmisc)      # ???
-library(venneuler)  # venn diagrams 
+#library(polycor)    # ???
+#library(Hmisc)      # ???
 library(UpSetR)     # specific plot
 library(metafor)    # meta-analysis package
 ```
@@ -37,7 +36,7 @@ rm(tabDesc)
 
 What shall we use as predictors of death? Central question includes what phenotypes and diagnostic markers are associated with survival in the US population. This is important as these markers are used in the clinic for diagnosis of disease.
 
-There are 66 EWAS categories or unique `VarDescription$var_desc_ewas`. We subset and use ~13 of them defined in `useTheseCategories` to be associated with death. We subset the data for the cohorts defined by the years in `useTheseSeries`.
+There are 66 EWAS categories or unique `VarDescription$var_desc_ewas`. We subset and use 13 of them defined in `useTheseCategories` to be associated with mortality. We subset the data for the cohorts defined by the years in `useTheseSeries`.
 
 ```{r}
 length( names(table(VarDescription$var_desc_ewas)) ) # 66 unique
@@ -48,7 +47,7 @@ useTheseSeries <- c('1999-2000', '2001-2002', '2003-2004', '2005-2006', '2007-20
 VarDescription.2 <- VarDescription[VarDescription$var_desc_ewas %in% useTheseCategories & VarDescription$series %in% useTheseSeries, ]
 ```
 
-Do a quick table to see the variable distribution, there are about 1,484 unique ones. We subset the list based on prefix using what's defined in `beginWith` and store that in `VarDescription.3`. This brings down the list of variables to about 439.
+Do a quick table to see the variable distribution, there are about 1,484 unique ones. We subset the list based on prefix using what's defined in `beginWith` and store that in `VarDescription.3`. This brings down the list of variables to 339.
 
 ```{r}
 head( table(VarDescription.2$var, VarDescription.2$series) ) # Variables by cohort year,
@@ -119,6 +118,11 @@ final.table <- aggregate(. ~ var, final.table, function(x) { toString(unique(x))
 final.table$var <- toupper(final.table$var) # pretty print formatting, uppercase var names
 
 pie(sort(table(final.table$var_desc_ewas)), main="Variables to Analyze by Category")
+
+# update with manually defined clinical categories
+clinical_categories <- read.csv("~/src/phenome-mortality/clinical_categories.csv", stringsAsFactors=F)
+final.table <- merge(final.table, clinical_categories[, c("dep_var", "category")], by.x="var", by.y="dep_var", all.x=T)
+table(final.table$category)
 ```
 
 With our final list of variables in hand we should revisit the `MainTable` that contained the patients to pare down the data to just include these final variable descriptors after we define covariates! Part 1: age, sex, race/ethnicity, age^2. Part 2: chronic disease (self report), ratio of family income to poverty ([INDFMPIR](https://wwwn.cdc.gov/Nchs/Nhanes/2011-2012/DEMO_G.htm#INDFMPIR)).
@@ -219,7 +223,7 @@ FinalVariableList.heat.raw <- matrix(NA, nrow=length(transform.cols), ncol=lengt
 FinalVariableList.heat.log <- matrix(NA, nrow=length(transform.cols), ncol=length(transform.cols), dimnames=list(final.numeric.names, final.numeric.names))
 
 for (i in 1:length(final.numeric.names)) {
-  for (j in 1:length(final.numeric.names)) {
+  for (j in i:length(final.numeric.names)) {
     #print(paste(i, j))
     
     #tmp <- cbind( MainTable.2[final.numeric.names[i]], MainTable.2[final.numeric.names[j]] )
@@ -233,10 +237,12 @@ for (i in 1:length(final.numeric.names)) {
 }
 ```
 
-```{r}
+```{r eval=FALSE}
 library(RColorBrewer)
 #heatmap(FinalVariableList.heat.log, Rowv=NA, Colv=NA, col=colorRampPalette(c("white", "red"))(n=100), scale='none')
-heatmap(FinalVariableList.heat.log, col=colorRampPalette(c("white", "red"))(n=100), scale='none')
+FinalVariableList.heat.log[is.na(FinalVariableList.heat.log)] <- 0
+FinalVariableList.heat.log[lower.tri(FinalVariableList.heat.log)] <- NA
+heatmap(FinalVariableList.heat.log, col=colorRampPalette(c("white", "red"))(n=100), scale='none', Rowv=NA, Colv=NA)
 ```
 
 Sample analysis below.
@@ -441,7 +447,7 @@ for (i in adjustfor) {
 }
 ```
 
-Now do survival analysis for all patients then subsetted by gender.
+Now do survival analysis for all patients then subsetted by gender, poverty income ratio (PIR), full benefit retirement age (65), and race.
 
 ```{r}
 # all analysis
@@ -495,7 +501,7 @@ surv.pir.below.sig <- subset(surv.pir.below, q < 0.05)
 surv.pir.below.sig <- surv.pir.below.sig[order(surv.pir.below.sig$beta), ]
 
 # age above analysis - OLD
- dsn.age.above <- subset(dsn.all, RIDAGEYR >= 62)
+ dsn.age.above <- subset(dsn.all, RIDAGEYR >= 65)
 surv.age.above.raw <- xwas(design=dsn.age.above, adjfor=adjustfor[!(adjustfor %in% c("RIDAGEYR", "RIDAGEYR2"))])
 surv.age.above.coef <- lapply(surv.age.above.raw, function(x) { coef(summary(x)) })
 surv.age.above.r2 <- lapply(surv.age.above.raw, function(x) { weightedr2(x) }) # list of df
@@ -505,7 +511,7 @@ surv.age.above.sig <- subset(surv.age.above, q < 0.05)
 surv.age.above.sig <- surv.age.above.sig[order(surv.age.above.sig$beta), ]
 
 # age below analysis - YOUNG
- dsn.age.below <- subset(dsn.all, INDFMPIR < 1)
+ dsn.age.below <- subset(dsn.all, RIDAGEYR < 65)
 surv.age.below.raw <- xwas(design=dsn.age.below, adjfor=adjustfor[!(adjustfor %in% c("RIDAGEYR", "RIDAGEYR2"))])
 surv.age.below.coef <- lapply(surv.age.below.raw, function(x) { coef(summary(x)) })
 surv.age.below.r2 <- lapply(surv.age.below.raw, function(x) { weightedr2(x) }) # list of df
@@ -752,6 +758,19 @@ surv.race.latin.meta.sig <- surv.race.latin.meta[surv.race.latin.meta$p < 0.05, 
 View(surv.race.white.meta.sig[!(row.names(surv.race.white.meta.sig) %in% c(row.names(surv.race.black.meta.sig), row.names(surv.race.latin.meta.sig))), ]) # vars UNIQUE to white
 View(surv.race.black.meta.sig[!(row.names(surv.race.black.meta.sig) %in% c(row.names(surv.race.white.meta.sig), row.names(surv.race.latin.meta.sig))), ]) # vars UNIQUE to black
 View(surv.race.latin.meta.sig[!(row.names(surv.race.latin.meta.sig) %in% c(row.names(surv.race.white.meta.sig), row.names(surv.race.black.meta.sig))), ]) # vars UNIQUE to latin
+```
+
+Create all forest plots.
+
+```{r eval=FALSE}
+metaforest <- function(x, group="N/A", base="") {
+  for (i in names(x)) {
+    png(file=paste0("~/src/phenome-mortality/forest/", base, i, ".png"))
+    forest(x[[i]], main=paste0("\n\n\n\n\n", group, "\n\n", VarDescription[VarDescription$var == i, ]$var_desc[1]))
+    dev.off()
+  }
+}
+metaforest(surv.all.meta.raw, "All-cause", "all")
 ```
 
 Create UpSetR visualizations for comorbidities across time cohorts, highlights those that appear significant in at least in 3+ (half) of the time cohorts as well as in the total analysis.
@@ -1281,6 +1300,7 @@ boxplot(value ~ MORTSTAT*variable, data=subset(tmp, !is.na(value)))
 Do some visualization using venn diagrams (should have loaded `venneuler`).
 
 ```{r}
+library(venneuler)  # venn diagrams 
 MnF   <- table(c(rownames(surv.m.sig),   rownames(surv.f.sig))) > 1
 AnM   <- table(c(rownames(surv.all.sig), rownames(surv.m.sig))) > 1
 AnF   <- table(c(rownames(surv.all.sig), rownames(surv.f.sig))) > 1
@@ -1301,46 +1321,4 @@ vd <- venneuler(
   )
 
 plot(vd)
-```
-
-Comorbidities present in both genders analyzed separately (M and F).
-
-```{r}
-unique(subset(VarDescription, var %in% names(MnF[MnF]))[, c("var", "var_desc", "var_desc_ewas")])
-```
-
-Comorbidities present in across All and M groups.
-
-```{r}
-unique(subset(VarDescription, var %in% names(AnM[AnM]))[, c("var", "var_desc", "var_desc_ewas")])
-```
-
-Comorbidities present in across All and F groups.
-
-```{r}
-unique(subset(VarDescription, var %in% names(AnF[AnF]))[, c("var", "var_desc", "var_desc_ewas")])
-```
-
-Comorbidities present in across All and M and F groups.
-
-```{r}
-unique(subset(VarDescription, var %in% names(AnMnF[AnMnF]))[, c("var", "var_desc", "var_desc_ewas")])
-```
-
-Comorbidities present only in All.
-
-```{r}
-subset(surv.all.sig, var %in% OnlyA)
-```
-
-Comorbidities present only in M.
-
-```{r}
-subset(surv.m.sig, var %in% OnlyM)
-```
-
-Comorbidities present only in F.
-
-```{r}
-subset(surv.f.sig, var %in% OnlyF)
 ```
