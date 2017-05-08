@@ -764,14 +764,25 @@ View(surv.race.latin.meta.sig[!(row.names(surv.race.latin.meta.sig) %in% c(row.n
 Create all forest plots.
 
 ```{r eval=FALSE}
-metaforest <- function(x, group="N/A", base="") {
+metaforest <- function(x, group=NA, group_desc=NA, strata=NA) {
   for (i in names(x)) {
-    png(file=paste0("~/src/phenome-mortality/forest/", base, i, ".png"))
-    forest(x[[i]], main=paste0("\n\n\n\n\n", group, "\n\n", VarDescription[VarDescription$var == i, ]$var_desc[1]))
+    png(file=paste0("~/src/phenome-mortality/gh-pages/forest/", group, "/", ifelse(!is.na(strata), paste0(strata, "/"), ""), i, ".png"))
+    forest(x[[i]], main=paste0("\n\n\n\n\n", group_desc, "\n\n", VarDescription[VarDescription$var == i, ]$var_desc[1]))
     dev.off()
   }
 }
-metaforest(surv.all.meta.raw, "All-cause", "all")
+
+metaforest(surv.all.meta.raw, group="all", group_desc="All-cause")
+
+metaforest(surv.age.above.meta.raw, group="age", group_desc="Age (> 65)", strata="above")
+metaforest(surv.age.below.meta.raw, group="age", group_desc="Age (< 65)", strata="below")
+
+metaforest(surv.pir.above.meta.raw, group="pir", group_desc="Poverty:Income (> 1)", strata="above")
+metaforest(surv.pir.below.meta.raw, group="pir", group_desc="Poverty:Income (< 1)", strata="below")
+
+metaforest(surv.race.white.meta.raw, group="race", group_desc="Race (White)", strata="white")
+metaforest(surv.race.black.meta.raw, group="race", group_desc="Race (Black)", strata="black")
+metaforest(surv.race.latin.meta.raw, group="race", group_desc="Race (Mexican-American)", strata="latin")
 ```
 
 Create UpSetR visualizations for comorbidities across time cohorts, highlights those that appear significant in at least in 3+ (half) of the time cohorts as well as in the total analysis.
