@@ -77,7 +77,7 @@ length(FinalVariableList) # final list of variables is 181
 
 Some data points are duplicates (e.g., SI measurements). Find all the lab measures that end in SI suffix and store in `SIduplicates` as the search space. Find variables that exist in whole text plus again with SI appended to the end and log it in new list while removing from the `FinalVariableList`.
 
-Also remove the redundant 1/Creatinine measure (`LBXSCRINV`).
+Also remove the redundant 1/Creatinine (`LBXSCRINV`) and triglyceride (`LBXSTR`) measures.
 
 ```{r}
 SIduplicates <- FinalVariableList[grep("SI$", FinalVariableList)]
@@ -102,8 +102,9 @@ SIduplicates.removed # only 4 duplicated measurements reported as SI
 FinalVariableList <- FinalVariableList[!(FinalVariableList %in% SIduplicates.removed)] # remove the SI imposters
 
 FinalVariableList <- FinalVariableList[FinalVariableList != "LBXSCRINV"] # remove the redundant inverted creatinine measure
+FinalVariableList <- FinalVariableList[FinalVariableList != "LBXSTR"] # remove the duplicated triglyceride measure
 
-length(FinalVariableList) # final variable list is now 154
+length(FinalVariableList) # final variable list is now 153
 ```
 
 Before we go further let's review our chosen variables.
