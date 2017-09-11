@@ -126,11 +126,43 @@ final.table <- merge(final.table, clinical_categories[, c("dep_var", "category")
 table(final.table$category)
 ```
 
-With our final list of variables in hand we should revisit the `MainTable` that contained the patients to pare down the data to just include these final variable descriptors after we define covariates! Part 1: age, sex, race/ethnicity, age^2. Part 2: chronic disease (self report), ratio of family income to poverty ([INDFMPIR](https://wwwn.cdc.gov/Nchs/Nhanes/2011-2012/DEMO_G.htm#INDFMPIR)).
+With our final list of variables in hand we should revisit the `MainTable` that contained the patients to pare down the data to just include these final variable descriptors after we define covariates. First we need to derive two additional variables of interest, (1) number of times the patient received healthcare and (2) number of overnight visits to the hospital.
+
+```{r}
+# assume MainTable is the main data frame
+table(MainTable$HUQ050, MainTable$SDDSRVYR) # for A, B, C, D, E, F, G: # times recieve healthcare over last year
+table(MainTable$HUQ051, MainTable$SDDSRVYR) # for H: # times recieve healthcare over last year
+MainTable$num_times_health_care <- NA
+MainTable$num_times_health_care <-ifelse(MainTable$SDDSRVYR <= 7, MainTable$HUQ050, MainTable$HUQ051)
+MainTable[which(MainTable$num_times_health_care > 10), 'num_times_health_care'] <- NA
+MainTable[which(MainTable$num_times_health_care > 5), 'num_times_health_care'] <- 5
+
+# number of overnight hospital visits
+table(MainTable$HUQ070, MainTable$SDDSRVYR) # for A: Overnight hospital patient in last year
+table(MainTable$HUD070, MainTable$SDDSRVYR) # for B: Overnight Hospital patient in last year
+table(MainTable$HUQ071, MainTable$SDDSRVYR) # for C,D,E,F,G,H: Overnight Hospital patient in last year
+table(MainTable$HUD080, MainTable$SDDSRVYR) # for A,C,D,E,F,G,H: Times overnite hospital patient last year
+table(MainTable$HUQ080, MainTable$SDDSRVYR) # for B: Times overnite hospital patient last year
+
+MainTable$overnight_in_hospital <- ifelse(MainTable$SDDSRVYR >= 3, MainTable$HUQ071, ifelse(MainTable$SDDSRVYR == 1, MainTable$HUQ070, MainTable$HUD070))
+table(MainTable$overnight_in_hospital, MainTable$SDDSRVYR)
+
+MainTable$times_overnight_in_hospital <- ifelse(MainTable$overnight_in_hospital == 2, 
+                                                0, 
+                                                ifelse(MainTable$SDDSRVYR == 2, 
+                                                       MainTable$HUQ080,
+                                                       MainTable$HUD080
+                                                       )
+                                                )
+MainTable$times_overnight_in_hospital[which(MainTable$times_overnight_in_hospital >= 7)] <- NA
+table(MainTable$times_overnight_in_hospital, MainTable$SDDSRVYR)
+```
+
+Part 1: age, sex, race/ethnicity, age^2. Part 2: chronic disease (self report), ratio of family income to poverty ([INDFMPIR](https://wwwn.cdc.gov/Nchs/Nhanes/2011-2012/DEMO_G.htm#INDFMPIR)).
 
 ```{r}
 MainTable$RIDAGEYR2 <- MainTable$RIDAGEYR^2
-adjustfor <- c('RIDAGEYR', 'RIDAGEYR2', 'RIAGENDR', 'INDFMPIR', 'RIDRETH1') # cleaned up to include just what we need
+adjustfor <- c('RIDAGEYR', 'RIDAGEYR2', 'RIAGENDR', 'INDFMPIR', 'RIDRETH1', 'num_times_health_care', 'times_overnight_in_hospital') # cleaned up to include just what we need
 variablesToKeep <- c('PERMTH_EXM', 'MORTSTAT', adjustfor, FinalVariableList, 'SDDSRVYR', 'SDMVPSU', 'SDMVSTRA', 'WTMEC2YR', 'WTMEC4YR', 'area')
 
 MainTable.2 <- MainTable[, colnames(MainTable) %in% variablesToKeep]
@@ -478,7 +510,7 @@ Now do survival analysis for all patients then subsetted by gender, poverty inco
 ```{r}
 # all analysis
 dsn.all <- svydesign(ids=~SDMVPSU, strata=~SDMVSTRA, weights=~WTMEC2YR, data=subset(MainTable.cleaned, WTMEC2YR > 0), nest=TRUE)
-#surv.all.raw <- xwas(design=dsn.all, adjfor=adjustfor) # list of svycoxph 
+surv.all.raw <- xwas(design=dsn.all, adjfor=adjustfor) # list of svycoxph 
 #surv.all.coef <- lapply(surv.all.raw, function(x) { coef(summary(x)) }) # list of df
 #surv.all.r2 <- lapply(surv.all.raw, function(x) { weightedr2(x) }) # list of df
 #surv.all <- xwas2df(surv.all.coef) # df with beta, p, and q-values
@@ -498,6 +530,20 @@ dsn.age.below <- subset(dsn.all, RIDAGEYR <  65) # age below analysis - YOUNG
 dsn.race.latin <- subset(dsn.all, RIDRETH1 == 1) # # race analysis - LATIN (only mexican-american)
 dsn.race.white <- subset(dsn.all, RIDRETH1 == 3) # race analysis - WHITE
 dsn.race.black <- subset(dsn.all, RIDRETH1 == 4) # race analysis - BLACK
+
+# for K-M plots
+surv.m.raw <- xwas(design=dsn.m, adjfor=adjustfor[adjustfor != "RIAGENDR"])
+surv.f.raw <- xwas(design=dsn.f, adjfor=adjustfor[adjustfor != "RIAGENDR"])
+
+surv.pir.above.raw <- xwas(design=dsn.pir.above, adjfor=adjustfor[adjustfor != "INDFMPIR"])
+surv.pir.below.raw <- xwas(design=dsn.pir.below, adjfor=adjustfor[adjustfor != "INDFMPIR"])
+
+surv.age.above.raw <- xwas(design=dsn.age.above, adjfor=adjustfor[!(adjustfor %in% c("RIDAGEYR", "RIDAGEYR2"))])
+surv.age.below.raw <- xwas(design=dsn.age.below, adjfor=adjustfor[!(adjustfor %in% c("RIDAGEYR", "RIDAGEYR2"))])
+
+surv.race.latin.raw <- xwas(design=dsn.race.latin, adjfor=adjustfor[adjustfor != "RIDRETH1"])
+surv.race.white.raw <- xwas(design=dsn.race.white, adjfor=adjustfor[adjustfor != "RIDRETH1"])
+surv.race.black.raw <- xwas(design=dsn.race.black, adjfor=adjustfor[adjustfor != "RIDRETH1"])
 
 # cohort analysis - looping through each study year
 AvailableSeries <- names(table( dsn.all$variables$SDDSRVYR ))
@@ -914,7 +960,7 @@ Now test your significant list for r^2 values for all comorbidities.
 ```{r}
 baseformula <- as.formula(sprintf('Surv(%s, %s) ~ cluster(area)', "PERMTH_EXM", "MORTSTAT"))
 baseformula <- addToBase(baseformula, adjustfor)
-baseformula <- addToBase(baseformula, rownames(com.all))
+baseformula <- addToBase(baseformula, com.list.all)
 
 print(baseformula) # our final model
 
@@ -1081,7 +1127,7 @@ boxplot(value ~ MORTSTAT*variable, data=subset(tmp, !is.na(value)))
 
 Do some visualization using venn diagrams (should have loaded `venneuler`).
 
-```{r}
+```{r eval=FALSE}
 library(venneuler)  # venn diagrams 
 MnF   <- table(c(rownames(surv.m.sig),   rownames(surv.f.sig))) > 1
 AnM   <- table(c(rownames(surv.all.sig), rownames(surv.m.sig))) > 1
