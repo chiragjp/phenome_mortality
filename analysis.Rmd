@@ -16,7 +16,7 @@ library(survey)     # required for stratified analysis
 #library(polycor)    # ???
 #library(Hmisc)      # ???
 library(UpSetR)     # specific plot
-library(metafor)    # meta-analysis package
+library(metafor, quietly=T)    # meta-analysis package
 ```
 
 In the `nhanes_schema_merged_all_031816.Rdata` file you can load with the Dropbox or custom path. `bigData` and `tabDesc` in the new NHANES data maps with `MainTable` and `VarDescription` from the Scientific Data paper. I remapped this data so you could comment out this section and for the most part still run the code as-is if you wanted to use the package version or prior data.
@@ -958,15 +958,43 @@ par(mfrow=c(1,1))
 Now test your significant list for r^2 values for all comorbidities.
 
 ```{r}
-baseformula <- as.formula(sprintf('Surv(%s, %s) ~ cluster(area)', "PERMTH_EXM", "MORTSTAT"))
-baseformula <- addToBase(baseformula, adjustfor)
-baseformula <- addToBase(baseformula, com.list.all)
+nagelkerke <- list()
 
-print(baseformula) # our final model
+for (i in 1:nrow(surv.all.meta.sig)) { # number of covariates in model
+  print(paste("Sampling models with", i, "covariates."))
+  samples <- c()
+  
+  for (j in 1:(3*nrow(surv.all.meta.sig))) { # sample the model with 'i' covariates 30 times (same as total)
+    baseformula <- as.formula(sprintf('Surv(%s, %s) ~ cluster(area)', "PERMTH_EXM", "MORTSTAT"))
+    baseformula <- addToBase(baseformula, adjustfor)
+    baseformula <- addToBase(baseformula, sample(rownames(surv.all.meta.sig), i))
+    
+    #print(baseformula) # debug our sample model
+    #coxph(baseformula, data=dsn.all$variables, weights=1/dsn.all$allprob[, 1])  # changed to coxph
+    
+    r2 <- NA
+    tryCatch({
+        r2 <- weightedr2( coxph(baseformula, data=dsn.all$variables, weights=1/dsn.all$allprob[, 1]) )
+      }, 
+      warning=function(cond) {
+        return()
+      },
+      error=function(cond) {
+        return()
+      },
+      finally=function(cond) {
+        return()
+      }
+    )
+    samples <- c(samples, r2)
+  }
+  
+  nagelkerke[[i]] <- samples
+}
+```
 
-coxph(baseformula, data=dsn.all$variables, weights=1/dsn.all$allprob[, 1])  # changed to coxph
-
-weightedr2( coxph(baseformula, data=dsn.all$variables, weights=1/dsn.all$allprob[, 1]) )
+```{r}
+barplot(unlist(lapply(nagelkerke, function(x) { sum(!is.na(x)) })), main="Viable Models per Number of Covariates", ylab="Viable Models (out of 30 Samplings)", xlab="Number of Covariates")
 ```
 
 # Kaplan Meier Curves - All
@@ -1068,18 +1096,6 @@ coxph(baseformula, data=dsn.all$variables, weights=1/dsn.all$allprob[, 1])  # ch
 weightedr2( coxph(baseformula, data=dsn.all$variables, weights=1/dsn.all$allprob[, 1]) )
 ```
 
-Also visualize by race.
-
-```{r}
-#library(RColorBrewer)
-#sequential <- rev(brewer.pal(9, "Blues"))
-```
-
-Now test your significant list for r^2 values by race.
-
-```{r}
-```
-
 Also visualize by income poverty.
 
 ```{r}
@@ -1101,11 +1117,6 @@ text(subset(com.super.gender, var %in% com.m.only$var)$beta.m, subset(com.super.
      , labels=subset(com.super.gender, var %in% com.m.only$var)$var_desc, col="blue", cex=0.4, adj=c(-0.07,0.4))
 text(subset(com.super.gender, var %in% com.f.only$var)$beta.m, subset(com.super.gender, var %in% com.f.only$var)$beta.f
      , labels=subset(com.super.gender, var %in% com.f.only$var)$var_desc, col="pink", cex=0.4, adj=c(1.15,0.4))
-```
-
-Now test your significant list for r^2 values by income.
-
-```{r}
 ```
 
 
