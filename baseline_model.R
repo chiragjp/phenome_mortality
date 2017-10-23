@@ -12,10 +12,12 @@ rm(bigData)
 rm(tabDesc)
 
 baseline.mod <- coxph(Surv(PERMTH_EXM, MORTSTAT) ~ 
-                        I(scale(RIDAGEYR))  + I(scale(RIDAGEYR)^2) + RIAGENDR + scale(INDFMPIR) + factor(RIDRETH1, c(3, 1, 2, 4, 5)) + cluster(area), 
+                        I(scale(RIDAGEYR))  + I(scale(RIDAGEYR)^2) + RIAGENDR + I(scale(INDFMPIR)) + factor(RIDRETH1, c(3, 1, 2, 4, 5)) + 
+                        I(scale(num_times_health_care)) + I(scale(times_overnight_in_hospital)) + cluster(area), 
                       weights=MainTable$WTINT2YR, MainTable)
 
 tidyBaseline <- tidy(baseline.mod, exponentiate = T)
 tidyBaseline$HR <- sprintf('%.02f', tidyBaseline$estimate)
 tidyBaseline$conf_int_string <- (sprintf('%.02f,%.02f', tidyBaseline$conf.low, tidyBaseline$conf.high))
-write.csv(tidyBaseline[, c('term', 'HR', 'conf_int_string', 'p.value')], row.names = F, file='~/Downloads/baseline.csv')
+#write.csv(tidyBaseline[, c('term', 'HR', 'conf_int_string', 'p.value')], row.names = F, file='~/Downloads/baseline.csv')
+tidyBaseline[, c('term', 'HR', 'conf_int_string', 'p.value')]

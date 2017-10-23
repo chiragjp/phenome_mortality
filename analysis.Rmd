@@ -8,15 +8,16 @@ output: html_document
 knitr::opts_chunk$set(echo=TRUE)
 ```
 
-This is code for mortality analysis on the NHANES data. First load all library dependencies.
+This is code for mortality analysis on the NHANES data. First load all library dependencies, you likely won't want to suppress messages if this is your first time running.
 
 ```{r}
-library(survival)   # required for coxph function
-library(survey)     # required for stratified analysis
-#library(polycor)    # ???
-#library(Hmisc)      # ???
-library(UpSetR)     # specific plot
-library(metafor, quietly=T)    # meta-analysis package
+suppressMessages(library(survival)) # required for coxph function
+suppressMessages(library(survey))   # required for stratified analysis
+#library(polycor)    
+#library(Hmisc)     
+library(broom)
+suppressMessages(library(UpSetR))   # specific plot
+suppressMessages(library(metafor))  # meta-analysis package
 ```
 
 In the `nhanes_schema_merged_all_031816.Rdata` file you can load with the Dropbox or custom path. `bigData` and `tabDesc` in the new NHANES data maps with `MainTable` and `VarDescription` from the Scientific Data paper. I remapped this data so you could comment out this section and for the most part still run the code as-is if you wanted to use the package version or prior data.
@@ -294,7 +295,11 @@ annotation_colors <- unique(c(brewer.pal(9,"Set1"), brewer.pal(12, "Set3"))[1:le
 names(annotation_colors) <- unique(annotation$category)
 annotation_colors <- list(category=annotation_colors)
 
-pheatmap(FinalVariableList.heat, fontsize_row=5, fontsize_col=5, annotation_row=annotation, annotation_col=annotation, annotation_colors=annotation_colors)
+pheatmap(FinalVariableList.heat, fontsize_row=5, fontsize_col=5, annotation_row=annotation, annotation_col=annotation, annotation_colors=annotation_colors, legend=T, annotation_legend=T, show_rownames=T, show_colnames=T, breaks=seq(-1,1,by=0.1), color=colorRampPalette(rev(brewer.pal(n=11, name="RdYlBu")))(20))
+
+png(filename="heat.png", width=2500, height=2100, res=223)
+pheatmap(FinalVariableList.heat, fontsize_row=5, fontsize_col=5, annotation_row=annotation, annotation_col=annotation, annotation_colors=annotation_colors, legend=T, annotation_legend=T, show_rownames=T, show_colnames=T, breaks=seq(-1,1,by=0.1), color=colorRampPalette(rev(brewer.pal(n=11, name="RdYlBu")))(20))
+dev.off()
 ```
 
 Sample analysis below.
@@ -362,6 +367,26 @@ for (year in names(table(MainTable.cleaned$SDDSRVYR))) {
     paste0(year, "\t",
            round(mean(subset(MainTable.cleaned, SDDSRVYR == year & !is.na(MORTSTAT))$MORTSTAT, na.rm=T)*100, digits=1)
            ),
+    "\n")
+}
+
+# n healthcare
+for (year in names(table(MainTable.cleaned$SDDSRVYR))) {
+  cat(
+    paste0(year, "\t",
+           round(mean(subset(MainTable.cleaned, SDDSRVYR == year & !is.na(MORTSTAT))$num_times_health_care, na.rm=T), digits=1), " ", 
+           "(", round(sd(subset(MainTable.cleaned, SDDSRVYR == year & !is.na(MORTSTAT))$num_times_health_care, na.rm=T), digits=1), ")"
+           ), 
+    "\n")
+}
+
+# n overnight hospital
+for (year in names(table(MainTable.cleaned$SDDSRVYR))) {
+  cat(
+    paste0(year, "\t",
+           round(mean(subset(MainTable.cleaned, SDDSRVYR == year & !is.na(MORTSTAT))$times_overnight_in_hospital, na.rm=T), digits=1), " ", 
+           "(", round(sd(subset(MainTable.cleaned, SDDSRVYR == year & !is.na(MORTSTAT))$times_overnight_in_hospital, na.rm=T), digits=1), ")"
+           ), 
     "\n")
 }
 ```
@@ -476,33 +501,21 @@ weightedr2 <- function(mod, useweight=T) {
 }
 ```
 
-Show that demographic variables captured in `adjustfor` are significant. TODO: make this a single model with only adjustfor (then turn into a table)
-
-```{r eval=FALSE}
-for (i in adjustfor) { 
-  print( 
-    svycoxph(
-      as.formula(sprintf('Surv(%s, %s) ~ I(%s)', "PERMTH_EXM", "MORTSTAT", i)), 
-      svydesign(ids=~SDMVPSU, strata=~SDMVSTRA, weights=~WTMEC2YR, data=subset(MainTable.cleaned, WTMEC2YR > 0), nest=TRUE)
-    ) 
-  ) 
-}
-```
-
-Run an alternative modeling method using a robust Cox PH model
+Baselie model to show that demographic variables captured in `adjustfor` are significant.
 
 ```{r}
-MainTable.cleaned.use <- subset(MainTable.cleaned, WTMEC2YR > 0)
-for (i in adjustfor) { 
-  print( 
-    coxph(
-      as.formula(sprintf('Surv(%s, %s) ~ I(%s) + cluster(area)', "PERMTH_EXM", "MORTSTAT", i)), 
-      weights=MainTable.cleaned.use$WTMEC2YR,
-      data=MainTable.cleaned.use
-    ) 
-  ) 
-}
-rm(MainTable.cleaned.use)
+baseline.mod <- coxph(Surv(PERMTH_EXM, MORTSTAT) ~ 
+                        I(scale(RIDAGEYR))  + I(scale(RIDAGEYR)^2) + RIAGENDR + I(scale(INDFMPIR)) + 
+                        I(scale(num_times_health_care)) + I(scale(times_overnight_in_hospital)) + 
+                        factor(RIDRETH1, c(3, 1, 2, 4, 5)) + cluster(area), 
+                        weights=MainTable$WTINT2YR, MainTable)
+
+tidyBaseline <- tidy(baseline.mod, exponentiate=T)
+tidyBaseline$HR <- sprintf('%.02f', tidyBaseline$estimate)
+tidyBaseline$conf_int_string <- (sprintf('%.02f,%.02f', tidyBaseline$conf.low, tidyBaseline$conf.high))
+#tmp$p <- pnorm(abs(tmp$beta/tmp$se), lower.tail=F)*2
+#pnorm(abs(exp(tidyBaseline$estimate)/tidyBaseline$std.error), lower.tail=F)*2
+tidyBaseline[, c('term', 'HR', 'conf_int_string', 'p.value')]
 ```
 
 Now do survival analysis for all patients then subsetted by gender, poverty income ratio (PIR), full benefit retirement age (65), and race.
@@ -955,6 +968,14 @@ par(mfrow=c(1,1))
 #dev.off()
 ```
 
+Heatmap for only the 30 significant measures for mortality.
+
+```{r}
+baseline.heat <- FinalVariableList.heat[rownames(FinalVariableList.heat) %in% rownames(surv.all.meta.sig), colnames(FinalVariableList.heat) %in% rownames(surv.all.meta.sig)]
+
+pheatmap(baseline.heat, fontsize_row=5, fontsize_col=5, annotation_row=annotation, annotation_col=annotation, annotation_colors=annotation_colors, legend=T, annotation_legend=T, show_rownames=T, show_colnames=T, breaks=seq(-1,1,by=0.1), color=colorRampPalette(rev(brewer.pal(n=11, name="RdYlBu")))(20))
+```
+
 Now test your significant list for r^2 values for all comorbidities.
 
 ```{r}
@@ -964,7 +985,7 @@ for (i in 1:nrow(surv.all.meta.sig)) { # number of covariates in model
   print(paste("Sampling models with", i, "covariates."))
   samples <- c()
   
-  for (j in 1:(3*nrow(surv.all.meta.sig))) { # sample the model with 'i' covariates 30 times (same as total)
+  for (j in 1:(3*nrow(surv.all.meta.sig))) { # sample the model with 'i' covariates 90 times (3 x total)
     baseformula <- as.formula(sprintf('Surv(%s, %s) ~ cluster(area)', "PERMTH_EXM", "MORTSTAT"))
     baseformula <- addToBase(baseformula, adjustfor)
     baseformula <- addToBase(baseformula, sample(rownames(surv.all.meta.sig), i))
@@ -994,12 +1015,22 @@ for (i in 1:nrow(surv.all.meta.sig)) { # number of covariates in model
 ```
 
 ```{r}
-barplot(unlist(lapply(nagelkerke, function(x) { sum(!is.na(x)) })), main="Viable Models per Number of Covariates", ylab="Viable Models (out of 30 Samplings)", xlab="Number of Covariates")
+barplot(unlist(lapply(nagelkerke, function(x) { sum(!is.na(x))/90*100 })), main="Viable Models per Number of Covariates", ylab="Viable Models (%)", xlab="Number of Model Covariates", ylim=c(0,100), las=2)
+
+baseformula <- as.formula(sprintf('Surv(%s, %s) ~ cluster(area)', "PERMTH_EXM", "MORTSTAT"))
+baseformula <- addToBase(baseformula, adjustfor)
+r2 <- weightedr2( coxph(baseformula, data=dsn.all$variables, weights=1/dsn.all$allprob[, 1]) )
+
+print(paste("Average Nagelkerke-R2 overall data is", mean(unlist(lapply(nagelkerke, function(x) { mean(x, na.rm=T) })), na.rm=T)))
+print(paste("Base Model Nagelkerke-R2 overall data is", r2))
+
+plot(1:30, unlist(lapply(nagelkerke, function(x) { mean(x, na.rm=T) })), xlab="No. of Model Covariates", ylab=expression(paste("Mean R"^"2")), ylim=c(0.12,0.24), las=1, frame.plot=F)
+abline(h=r2, lty=2)
 ```
 
 # Kaplan Meier Curves - All
 
-```{r} 
+```{r eval=FALSE} 
 plot(1, type="n", xlab="Years", xlim=c(0, 156), ylab="Survival Probability", ylim=c(0.75, 1.00), las=1, main="All Cause - No Filter", frame.plot=F, axes=F)
 axis(1, at=seq(0, 156, by=12), labels=c(0:13))
 axis(2, at=seq(0.75, 1.00, by=0.05), las=1)
@@ -1058,9 +1089,11 @@ lapply(surv.race.latin.raw[row.names(surv.race.latin.meta.sig)], function(x) { l
 legend("bottomleft", c("White", "Black", "Mexican-American"), lty=c(1, 1), col=c("red", "green", "blue"), bty='n')
 ```
 
-We need to visualize these effects by gender.
+*** Additional visualizations ***
 
-```{r}
+Visualize these effects by gender.
+
+```{r eval=FALSE}
 com.super.gender <- merge(com.all, surv.m.sig[, c("beta", "var")], by.x="var", by.y="var", all.x=T, suffixes=c("", ".m"))
 com.super.gender <- merge(com.super.gender, surv.f.sig[, c("beta", "var")], by.x="var", by.y="var", all.x=T, suffixes=c("", ".f"))
 
@@ -1080,48 +1113,6 @@ text(subset(com.super.gender, var %in% com.m.only$var)$beta.m, subset(com.super.
 text(subset(com.super.gender, var %in% com.f.only$var)$beta.m, subset(com.super.gender, var %in% com.f.only$var)$beta.f
      , labels=subset(com.super.gender, var %in% com.f.only$var)$var_desc, col="pink", cex=0.4, adj=c(1.15,0.4))
 ```
-
-Now test your significant list for r^2 values by gender.
-
-```{r}
-com.both <- intersect(rownames(com.m), rownames(com.f))
-baseformula <- as.formula(sprintf('Surv(%s, %s) ~ cluster(area)', "PERMTH_EXM", "MORTSTAT"))
-baseformula <- addToBase(baseformula, adjustfor)
-baseformula <- addToBase(baseformula, com.both)
-
-print(baseformula) # our final model
-
-coxph(baseformula, data=dsn.all$variables, weights=1/dsn.all$allprob[, 1])  # changed to coxph
-
-weightedr2( coxph(baseformula, data=dsn.all$variables, weights=1/dsn.all$allprob[, 1]) )
-```
-
-Also visualize by income poverty.
-
-```{r}
-com.super.pir <- merge(com.all, surv.m.sig[, c("beta", "var")], by.x="var", by.y="var", all.x=T, suffixes=c("", ".m"))
-com.super.pir <- merge(com.super.gender, surv.f.sig[, c("beta", "var")], by.x="var", by.y="var", all.x=T, suffixes=c("", ".f"))
-
-plot(com.super.gender$beta.m, com.super.gender$beta.f, 
-     xlab="Male", ylab="Female",
-     frame.plot=F, xlim=c(-0.6, 0.6), ylim=c(-0.6, 0.6), pch=20)
-
-abline(0, 1, col="gray60", lty=2)
-
-points(subset(com.super.gender, var %in% com.m.only$var)$beta.m, subset(com.super.gender, var %in% com.m.only$var)$beta.f
-       , col="blue", pch=20) # male only points
-points(subset(com.super.gender, var %in% com.f.only$var)$beta.m, subset(com.super.gender, var %in% com.f.only$var)$beta.f
-       , col="pink", pch=20) # female only points
-
-text(subset(com.super.gender, var %in% com.m.only$var)$beta.m, subset(com.super.gender, var %in% com.m.only$var)$beta.f
-     , labels=subset(com.super.gender, var %in% com.m.only$var)$var_desc, col="blue", cex=0.4, adj=c(-0.07,0.4))
-text(subset(com.super.gender, var %in% com.f.only$var)$beta.m, subset(com.super.gender, var %in% com.f.only$var)$beta.f
-     , labels=subset(com.super.gender, var %in% com.f.only$var)$var_desc, col="pink", cex=0.4, adj=c(1.15,0.4))
-```
-
-
-
-*** Additional visualizations ***
 
 Supplemental figures of skewness.
 
