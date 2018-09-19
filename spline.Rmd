@@ -1,5 +1,5 @@
 ---
-title: "analysis.R"
+title: "spline.R"
 date: "April 9, 2017"
 output: html_document
 ---
@@ -8,14 +8,15 @@ output: html_document
 knitr::opts_chunk$set(echo=TRUE)
 ```
 
-This is code for mortality analysis on the NHANES data. First load all library dependencies, you likely won't want to suppress messages if this is your first time running.
+This is code for mortality analysis on the NHANES data using spline modeling. First load all library dependencies, you likely won't want to suppress messages if this is your first time running.
 
 ```{r}
-suppressMessages(library(survival)) # required for coxph function
-suppressMessages(library(survey))   # required for stratified analysis
-suppressMessages(library(broom))
-suppressMessages(library(UpSetR))   # specific plot
-suppressMessages(library(metafor))  # meta-analysis package
+library(survival) # required for coxph function
+library(pspline)  # required for stratified analysis
+#library(polycor)    
+#library(Hmisc)     
+library(broom)
+library(metafor)  # meta-analysis package
 ```
 
 In the `nhanes_schema_merged_all_031816.Rdata` file you can load with the Dropbox or custom path. `bigData` and `tabDesc` in the new NHANES data maps with `MainTable` and `VarDescription` from the Scientific Data paper. I remapped this data so you could comment out this section and for the most part still run the code as-is if you wanted to use the package version or prior data.
@@ -132,7 +133,7 @@ With our final list of variables in hand we should revisit the `MainTable` that 
 table(MainTable$HUQ050, MainTable$SDDSRVYR) # for A, B, C, D, E, F, G: # times recieve healthcare over last year
 table(MainTable$HUQ051, MainTable$SDDSRVYR) # for H: # times recieve healthcare over last year
 MainTable$num_times_health_care <- NA
-MainTable$num_times_health_care <-ifelse(MainTable$SDDSRVYR <= 7, MainTable$HUQ050, MainTable$HUQ051)
+MainTable$num_times_health_care <- ifelse(MainTable$SDDSRVYR <= 7, MainTable$HUQ050, MainTable$HUQ051)
 MainTable[which(MainTable$num_times_health_care > 10), 'num_times_health_care'] <- NA
 MainTable[which(MainTable$num_times_health_care > 5), 'num_times_health_care'] <- 5
 
@@ -177,30 +178,16 @@ chronic_conditions <- c(
                         
                         "MCQ160A" # 6 ARTHRITIS Has a doctor or other health professional ever told {you/SP} that {you/s/he} . . .had arthritis?
                       )
-heart <- c("MCQ160B", "MCQ160C", "MCQ160E")
-cancer <- c("MCQ220")
 
-#MainTable$chronic <- apply(MainTable, 1, FUN=function(x) { ifelse(any(x[chronic_conditions] == 1, na.rm=T), 1, 0) } )
 MainTable$chronic <- 0 
-MainTable$heart <- 0 
-MainTable$cancer <- 0 
 
 # redo this loop, it's slow
 for (i in 1:nrow(MainTable)) {
-  if (i %% 1000 == 0) { 
-    #print(i) # debug super slow
-  }
-  
-  if ( any(MainTable[i, chronic_conditions] == 1, na.rm=T) ) {
+  #print(i) # debug super slow
+  if ( any(MainTable[i, c(chronic_conditions)] == 1, na.rm=T) ) {
     MainTable$chronic[i] <- 1
-  }
-
-  if ( any(MainTable[i, heart] == 1, na.rm=T) ) {
-    MainTable$heart[i] <- 1
-  }
-  
-  if ( any(MainTable[i, cancer] == 1, na.rm=T) ) {
-    MainTable$cancer[i] <- 1
+  } else {
+    MainTable$chronic[i] <- 0
   }
 }
 
@@ -210,9 +197,9 @@ for (i in 1:nrow(MainTable)) {
 Part 1: age, sex, race/ethnicity, age^2. Part 2: chronic disease (self report), ratio of family income to poverty ([INDFMPIR](https://wwwn.cdc.gov/Nchs/Nhanes/2011-2012/DEMO_G.htm#INDFMPIR)).
 
 ```{r}
-MainTable$RIDAGEYR2 <- MainTable$RIDAGEYR^2
+MainTable$RIDAGEYR2 <- NA # place holder, need to scale(RIDAGEYR)^2 for each cohort
 adjustfor <- c('RIDAGEYR', 'RIDAGEYR2', 'RIAGENDR', 'INDFMPIR', 'RIDRETH1', 'num_times_health_care', 'times_overnight_in_hospital', 'chronic') # cleaned up to include just what we need
-variablesToKeep <- c('PERMTH_EXM', 'MORTSTAT', adjustfor, FinalVariableList, 'SDDSRVYR', 'SDMVPSU', 'SDMVSTRA', 'WTMEC2YR', 'WTMEC4YR', 'area', 'heart', 'cancer', 'UCOD')
+variablesToKeep <- c('PERMTH_EXM', 'MORTSTAT', adjustfor, FinalVariableList, 'SDDSRVYR', 'SDMVPSU', 'SDMVSTRA', 'WTMEC2YR', 'WTMEC4YR', 'area')
 
 MainTable.2 <- MainTable[, colnames(MainTable) %in% variablesToKeep]
 
@@ -251,27 +238,19 @@ MainTable.2 <- MainTable.2.chronic
 
 # case 3 remove peopole who made medical visits last year
 MainTable.2.visits <- MainTable.2.base
-MainTable.2.visits <- subset(MainTable.2.visits, num_times_health_care == 0 & times_overnight_in_hospital == 0)
+MainTable.2.visits <- subset(MainTable.2.visits, num_times_health_care == 0)
 MainTable.2 <- MainTable.2.visits
 
 # case 4 all of the above
 MainTable.2.all <- MainTable.2.base
+MainTable.2.all <- subset(MainTable.2.all, num_times_health_care == 0) # remove health care users
+MainTable.2.all <- subset(MainTable.2.all, chronic == 0) # remove chronic conditions
 for (var in FinalVariableList) {
   if (class(MainTable.2.all[, var]) == "numeric") {
     MainTable.2.all[, var] <- remove_outliers(MainTable.2.all[, var])
   }
 }
-MainTable.2.all <- subset(MainTable.2.all, num_times_health_care == 0 & times_overnight_in_hospital == 0) # remove health care users
-MainTable.2.all <- subset(MainTable.2.all, chronic == 0) # remove chronic conditions
 MainTable.2 <- MainTable.2.all
-
-#MainTable.2 <- subset(MainTable.2.base, heart == 1)
-#MainTable.2 <- subset(MainTable.2.base, cancer == 1)
-
-# case 5 do 
-#MainTable.2 <- subset(MainTable.2.base, UCOD == "001")
-#MainTable.2 <- subset(MainTable.2.base, UCOD == "002")
-#MainTable.2 <- subset(MainTable.2.base, UCOD == "003")
 ```
 
 How many people actually have mortality in the data compared to our subset? Look at distribution of time to censorship or death (`PERMTH_EXM`) then subset the patient list to those for the survey year (`SDDSRVYR`) of before or equal to 6 or earlier than the 2009-2010 (excluding 2011-2012 and 2013-2014).
@@ -298,8 +277,9 @@ t.test(MainTable$PERMTH_EXM, MainTable.2$PERMTH_EXM)$p.value
 Now let's make sure every variable is the correct data type.
 
 ```{r}
-MainTable.2$RIAGENDR <- factor(MainTable.2$RIAGENDR, levels=c(1:2), labels=c('m', 'f')) # Gender
-MainTable.2$RIDRETH1 <- factor(MainTable.2$RIDRETH1) # Multiple ethnicities
+MainTable.2$RIAGENDR <- factor(MainTable.2$RIAGENDR, levels=c(1, 2), labels=c('m', 'f')) # Gender
+MainTable.2$RIDRETH1 <- factor(MainTable.2$RIDRETH1, levels=c(3, 1, 2, 4, 5), labels=c("white", "mexam", "hispanic", "black", "other")) # Ethnicity
+MainTable.2$RIDRETH1 <- relevel(MainTable.2$RIDRETH1, ref="white")
 MainTable.2$SDDSRVYR <- factor(MainTable.2$SDDSRVYR, levels=c(1:6), labels=c("1999-2000", "2001-2002", "2003-2004", "2005-2006", "2007-2008", "2009-2010")) # Survey year
 MainTable.2$SDMVPSU  <- factor(MainTable.2$SDMVPSU) # Primary Sampling Unit
 MainTable.2$SDMVSTRA <- factor(MainTable.2$SDMVSTRA) # Sample strata
@@ -331,7 +311,7 @@ MainTable.2.integer <- names(MainTable.2.classes[MainTable.2.classes == "integer
 MainTable.2.numeric <- names(MainTable.2.classes[MainTable.2.classes == "numeric"])
 
 # characters are really factors
-#apply(MainTable.2[, MainTable.2.factor], 2, table)
+apply(MainTable.2[, MainTable.2.factor], 2, table)
 
 sort(apply(MainTable.2[, MainTable.2.integer], 2, function(x) { length(table(x)) }))
 
@@ -348,7 +328,8 @@ transform.cols <- setdiff(transform.cols, ManualCategoricalVariablesIndex) # rem
 transform.cols <- setdiff(transform.cols, which(colnames(MainTable.2) %in% MainTable.2.factor)) # remove all other factors
 transform.cols <- setdiff(transform.cols, which(colnames(MainTable.2) %in% MainTable.2.integer)) # remove all integers, may not be necessary
 
-MainTable.cleaned <- cbind(MainTable.2[, !colnames(MainTable.2) %in% colnames(MainTable.2)[transform.cols]], apply(MainTable.2[, transform.cols], 2, function(x) { scale(log(x+1e-3)) })) # log transform the data
+MainTable.cleaned <- cbind(MainTable.2[, !colnames(MainTable.2) %in% colnames(MainTable.2)[transform.cols]], apply(MainTable.2[, transform.cols], 2, function(x) { scale(x) }))
+#MainTable.cleaned <- cbind(MainTable.2[, !colnames(MainTable.2) %in% colnames(MainTable.2)[transform.cols]], apply(MainTable.2[, transform.cols], 2, function(x) { scale(log(x+1e-10)) })) # log transform the data
 ```
 
 Some heatmap action for correlation of the quantitative variables...this is time-intenseive, don't always run so set to `eval=FALSE` by default.
@@ -482,7 +463,7 @@ for (year in names(table(MainTable.cleaned$SDDSRVYR))) {
            ), 
     "\n")
 }
-
+  
 # n overnight hospital
 for (year in names(table(MainTable.cleaned$SDDSRVYR))) {
   cat(
@@ -494,84 +475,60 @@ for (year in names(table(MainTable.cleaned$SDDSRVYR))) {
 }
 ```
 
-First define some supporting functions.
+Define some supporting functions.
 
 ```{r}
-# adds a list of co-variates to your model formula
-addToBase <- function(base_formula, adjustingVariables) {
-  #base_formula <- update.formula( base_formula, as.formula(sprintf('~ . + ridge(%s, theta=1e-10, scale=FALSE)', paste(adjustingVariables[c(1,2)], collapse=", "))) )
-  base_formula <- update.formula(base_formula, as.formula(sprintf('~ . + %s', "I(scale(RIDAGEYR)) + I(scale(RIDAGEYR)^2) + RIAGENDR + I(scale(INDFMPIR)) + I(scale(num_times_health_care)) + I(scale(times_overnight_in_hospital)) + factor(RIDRETH1, c(3, 1, 2, 4, 5)) + chronic")))
-  
-  "
-  for (var in adjustingVariables) {
-    if (var %in% adjustingVariables) {
-      base_formula <- update.formula( base_formula, as.formula(sprintf('~ . + I(%s)', var)) )
-    }
-  }
-  "
-  return(base_formula)
-}
-
 # convert xwas return list object to a data.frame with only beta and p-values for each co-variate
-xwas2df <- function(surv, spline=FALSE) {
-  if (spline) {
-    tmp <- lapply(surv, function(x) { return(x[2, c("coef", "se(coef)", "se2", "p")]) } ) 
-    tmp <- data.frame(matrix(unlist(tmp), nrow=length(tmp), byrow=T))
-    names(tmp) <- c("beta", "HR", "se", "p")
-    rownames(tmp) <- names(surv)
-    
-    return(tmp[!is.na(tmp$p), ])
-  } else {
-    tmp <- lapply(surv, function(x) { return(x[1, c("coef","exp(coef)", "robust se", "Pr(>|z|)")]) } ) 
-    tmp <- data.frame(matrix(unlist(tmp), nrow=length(tmp), byrow=T))
-    colnames(tmp) <- c("beta", "HR", "se", "p")
-    rownames(tmp) <- names(surv)
-    
-    # manually re-calculate p-values
-    tmp$p <- pnorm(abs(tmp$beta/tmp$se), lower.tail=F)*2
-    tmp <- tmp[order(tmp$beta), ] 
-    
-    return(tmp[complete.cases(tmp), ])
-  }
-  # return in if-else
+xwas2df <- function(surv) {
+  #tmp <- lapply(surv, function(x) { return(x[1, c("exp(coef)", "Pr(>|z|)")]) } ) 
+  tmp <- lapply(surv, function(x) { return(x[1, c("coef","exp(coef)", "robust se", "Pr(>|z|)")]) } ) 
+  tmp <- data.frame(matrix(unlist(tmp), nrow=length(tmp), byrow=T))
+  colnames(tmp) <- c("beta", "HR", "se", "p0")
+  rownames(tmp) <- names(surv)
+  
+  # manually re-calculate p-values
+  tmp$p <- pnorm(abs(tmp$beta/tmp$se), lower.tail=F)*2
+  tmp <- tmp[order(tmp$beta), ] 
+  
+  return(tmp[complete.cases(tmp), ])
 }
 
 # main workhorse function
-xwas <- function(design=NULL, timevar="PERMTH_EXM", depvar="MORTSTAT", adjfor=NULL, spline=FALSE) {
-  dsn <- design
-  total <- nrow(dsn$variables)
+xwas <- function(design=NULL, linear=FALSE) {
+  dat <- subset(design, WTMEC2YR > 0)
+  total <- nrow(dat)
   
   surv <- list()
   
-  for (varname in FinalVariableList) {
-    if (spline) {
-      baseformula <- as.formula(sprintf('Surv(%s, %s) ~ pspline(I(%s), df=4, degree=3) + cluster(area)', timevar, depvar, varname))
+  for (varname in FinalVariableList) { # probably need to parameterize FinalVariableList
+    baseformula <- NULL
+    
+    if (linear) {
+      baseformula <- as.formula(sprintf('Surv(PERMTH_EXM, MORTSTAT) ~ I(%s) + cluster(area) + I(scale(RIDAGEYR)) + I(scale(RIDAGEYR)^2) + RIAGENDR + I(scale(INDFMPIR)) + I(scale(num_times_health_care)) + I(scale(times_overnight_in_hospital)) + RIDRETH1 + chronic', varname))
     } else {
-      baseformula <- as.formula(sprintf('Surv(%s, %s) ~ I(%s) + cluster(area)', timevar, depvar, varname))
+      baseformula <- as.formula(sprintf('Surv(PERMTH_EXM, MORTSTAT) ~ pspline(%s, df=2) + cluster(area) + I(scale(RIDAGEYR)) + I(scale(RIDAGEYR)^2) + RIAGENDR + I(scale(INDFMPIR)) + I(scale(num_times_health_care)) + I(scale(times_overnight_in_hospital)) + RIDRETH1 + chronic', varname))
     }
-    baseformula <- addToBase(baseformula, adjfor) # demo variables to adjust for
-    #print(baseformula) # debug
-    
-    n <- sum( xtabs(~eval(as.symbol(depvar)) + eval(as.symbol(varname)), data=dsn$variables) )
-    #cat(prop.table(apply(xtabs(~eval(as.symbol(depvar)) + eval(as.symbol(varname)), data=dsn$variables), 1, sum)), " ") # debug
-    
+
+    n <- sum( xtabs(~eval(as.symbol(depvar)) + eval(as.symbol(varname)), data=dat) )
+
     if (n/total > 0.01) {
       tryCatch( 
-          surv[[varname]] <- coxph(baseformula, data=dsn$variables, weights=1/dsn$variables$WTMEC2YR)
-          #surv[[varname]] <- svycoxph(baseformula, design=dsn)
-        , error=function(e) { 
-          message(e)
-          message(sprintf(", coxph error: %s [%s]", varname, paste(adjfor, collapse=';')))
+        surv[[varname]] <- coxph(baseformula, data=dat, weights=dat$WTMEC2YR)
+        ,
+        
+        error=function(e) { 
+          message(sprintf("ERROR: %s, %s", varname, e))
         }
-        , warning=function(w) {
-        #  message(w)
-        #  message(sprintf(", coxph warning: %s [%s]", varname, paste(adjfor, collapse=';')))
-        }
+        #, 
+        #warning=function(w) {
+        #  message(sprintf("WARNING: %s, %s", varname, w))
+        #}
       )
     } else {
-      cat(sprintf("skipping %s, total cases < 1%% of data", varname), "\n")
+      cat(sprintf("skipping %s, total cases < 1%% of all data", varname), "\n")
     }
   }
+  
   return(surv)
 }
 
@@ -619,23 +576,72 @@ Baseline model to show that demographic variables captured in `adjustfor` are si
 baseline.mod <- coxph(Surv(PERMTH_EXM, MORTSTAT) ~ 
                         I(scale(RIDAGEYR))  + I(scale(RIDAGEYR)^2) + RIAGENDR + I(scale(INDFMPIR)) + 
                         I(scale(num_times_health_care)) + I(scale(times_overnight_in_hospital)) + 
-                        factor(RIDRETH1, c(3, 1, 2, 4, 5)) + chronic + cluster(area), 
-                        weights=MainTable.2$WTINT2YR, MainTable)
+                        RIDRETH1 + chronic + cluster(area), 
+                        weights=MainTable.2$WTINT2YR, MainTable.2)
 
 tidyBaseline <- tidy(baseline.mod, exponentiate=T)
 tidyBaseline$HR <- sprintf('%.02f', tidyBaseline$estimate)
-tidyBaseline$conf_int_string <- (sprintf('%.02f,%.02f', tidyBaseline$conf.low, tidyBaseline$conf.high))
+tidyBaseline$conf_int_string <- (sprintf('%.02f, %.02f', tidyBaseline$conf.low, tidyBaseline$conf.high))
 #tmp$p <- pnorm(abs(tmp$beta/tmp$se), lower.tail=F)*2
 #pnorm(abs(exp(tidyBaseline$estimate)/tidyBaseline$std.error), lower.tail=F)*2
 tidyBaseline[, c('term', 'HR', 'conf_int_string', 'p.value')]
 ```
 
+Prove that spline fitting is better than linear for our data using AIC.
+
+```{r}
+MainTable.cleaned <- subset(MainTable.cleaned, WTMEC2YR > 0)
+surv.all.raw.linear <- xwas(design=MainTable.cleaned, linear=TRUE) 
+surv.all.raw.spline <- xwas(design=MainTable.cleaned)
+```
+
+```{r}
+l_vs_s <- data.frame(linear=NA, spline=NA)
+set <- intersect(names(surv.all.raw.linear), names(surv.all.raw.spline))
+for (i in set) {
+  tmp <- data.frame(linear=AIC(surv.all.raw.linear[[i]]), spline=AIC(surv.all.raw.spline[[i]]))
+  rownames(tmp) <- i
+  
+  l_vs_s[nrow(l_vs_s)+1, ] <- tmp
+}
+l_vs_s <- l_vs_s[-1, ]
+l_vs_s$delta <- l_vs_s$linear - l_vs_s$spline
+
+median(l_vs_s$delta, na.rm=TRUE)
+# of the 120 variables the median delta is 564522.15 >>> 10
+
+library("Rmpfr")
+exp(-1*mpfr(l_vs_s$delta, precBits=4)/2)
+# p(linear is a better model that minimizes information loss) <<< 1e-1000 %
+```
+
+```{r}
+for (x in set) {
+  print(paste("Plotting", x))
+  tmp <- as.data.frame(MainTable.cleaned[, x])
+  rownames(tmp) <- rownames(MainTable.cleaned)
+  
+  predicted <- predict(surv.all.raw.spline[[x]], x=MainTable.cleaned, type="terms", se.fit=T, terms=1)
+  
+  tmp <- merge(tmp, cbind(predicted$fit, predicted$se.fit), by="row.names")
+  tmp <- tmp[, c(2,3,4)]
+  tmp <- tmp[complete.cases(tmp), ]
+  tmp <- tmp[order(tmp[, 1]), ]
+  rownames(tmp) <- 1:nrow(tmp)
+  colnames(tmp) <- c("var", "beta", "se")
+  
+  ## plot lines
+  png(paste0("~/src/phenome-mortality/plot/", x, ".png"))
+  plot( sm.spline(tmp$var, exp(tmp$beta)), type='l', frame.plot=F, xlab="SD", ylab="HR", main=x, xlim=c(-2,2))
+  lines( sm.spline(tmp$var, exp(tmp$beta + 1.96 * tmp$se)), col="orange", lty=2)
+  lines( sm.spline(tmp$var, exp(tmp$beta - 1.96 * tmp$se)), col="orange", lty=2)
+  dev.off()
+}
+```
+
 Now do survival analysis for all patients then subsetted by gender, poverty income ratio (PIR), full benefit retirement age (65), and race.
 
 ```{r}
-# all analysis
-dsn.all <- svydesign(ids=~SDMVPSU, strata=~SDMVSTRA, weights=~WTMEC2YR, data=subset(MainTable.cleaned, WTMEC2YR > 0), nest=TRUE)
-surv.all.raw <- xwas(design=dsn.all, adjfor=adjustfor) # list of svycoxph 
 #surv.all.coef <- lapply(surv.all.raw, function(x) { coef(summary(x)) }) # list of df
 #surv.all.r2 <- lapply(surv.all.raw, function(x) { weightedr2(x) }) # list of df
 #surv.all <- xwas2df(surv.all.coef) # df with beta, p, and q-values
@@ -643,16 +649,8 @@ surv.all.raw <- xwas(design=dsn.all, adjfor=adjustfor) # list of svycoxph
 #surv.all.sig <- subset(surv.all, q < 0.05) # only FDR significant variables
 #surv.all.sig <- surv.all.sig[order(surv.all.sig$beta), ] # sort by effect size
 
-#.Machine$double.eps <- 5e-300
-
-surv.all.raw.spline <- xwas(design=dsn.all, adjfor=adjustfor, spline=TRUE) # for spline
-models.linear <- t(as.data.frame(lapply(surv.all.raw[names(surv.all.raw.spline)], AIC)))
-models.spline <- t(as.data.frame(lapply(surv.all.raw.spline, AIC)))
-models.testing <- merge(models.linear, models.spline, by="row.names")
-colnames(models.testing) <- c("var", "linear", "spline")
-
-dsn.m <- subset(dsn.all, RIAGENDR == 'm') # male analysis
-dsn.f <- subset(dsn.all, RIAGENDR == 'f') # female analysis
+dsn.m <- subset(MainTable.cleaned, RIAGENDR == 'm') # male analysis
+dsn.f <- subset(MainTable.cleaned, RIAGENDR == 'f') # female analysis
 
 dsn.pir.above <- subset(dsn.all, INDFMPIR > 1) # PIR above analysis - WEALTHY
 dsn.pir.below <- subset(dsn.all, INDFMPIR < 1) # PIR below analysis - POVERTY
@@ -678,25 +676,10 @@ surv.race.latin.raw <- xwas(design=dsn.race.latin, adjfor=adjustfor[adjustfor !=
 surv.race.white.raw <- xwas(design=dsn.race.white, adjfor=adjustfor[adjustfor != "RIDRETH1"])
 surv.race.black.raw <- xwas(design=dsn.race.black, adjfor=adjustfor[adjustfor != "RIDRETH1"])
 
-# parsing spline coef
-spline_coef <- function(x) {
-  "
-  if (length(table(is.na(coef(x)))) > 1) {
-    return(NULL)
-  } else {
-    return( coef(summary(x)) )
-  }
-  "
-  return( tryCatch(coef(summary(x)), error=function(e){}) )
-}
-
-spline_remove_null <- function(x) {
-  return( x[!sapply(x, is.null)] )
-}
-
 # cohort analysis - looping through each study year
 AvailableSeries <- names(table( dsn.all$variables$SDDSRVYR ))
 for (i in 1:length(AvailableSeries)) {
+  #eval(parse(text=paste0("MainTable.", "2")))
   cat("Now analyzing", useTheseSeries[i], "series.\n")
   
   # subset each substratified dsn survey further by year
@@ -712,7 +695,7 @@ for (i in 1:length(AvailableSeries)) {
   assign( paste0("dsn.race.black.", i), subset(dsn.race.black, SDDSRVYR == AvailableSeries[i]))
   
   # survival analysis
-  assign( paste0("surv.all.raw.", i), xwas(design=eval(parse(text=paste0("dsn.all.", i))), adjfor=adjustfor, spline=TRUE) ) 
+  assign( paste0("surv.all.raw.", i), xwas(design=eval(parse(text=paste0("dsn.all.", i))), adjfor=adjustfor) ) 
   assign( paste0("surv.m.raw.", i),   xwas(design=eval(parse(text=paste0("dsn.m.", i))),   adjfor=adjustfor[adjustfor != "RIAGENDR"]) )
   assign( paste0("surv.f.raw.", i),   xwas(design=eval(parse(text=paste0("dsn.f.", i))),   adjfor=adjustfor[adjustfor != "RIAGENDR"]) )
   assign( paste0("surv.pir.above.raw.", i),  xwas(design=eval(parse(text=paste0("dsn.pir.above.", i))),  adjfor=adjustfor[adjustfor != "INDFMPIR"]) )
@@ -723,10 +706,7 @@ for (i in 1:length(AvailableSeries)) {
   assign( paste0("surv.race.white.raw.", i), xwas(design=eval(parse(text=paste0("dsn.race.white.", i))), adjfor=adjustfor[adjustfor != "RIDRETH1"]) )
   assign( paste0("surv.race.black.raw.", i), xwas(design=eval(parse(text=paste0("dsn.race.black.", i))), adjfor=adjustfor[adjustfor != "RIDRETH1"]) )
   
-  #assign( paste0("surv.all.coef.", i), lapply(eval(parse(text=paste0("surv.all.raw.", i))), function(x) { coef(summary(x)) }) ) # list of df
-  assign( paste0("surv.all.coef.", i), lapply(eval(parse(text=paste0("surv.all.raw.", i))), spline_coef ) ) # list of df
-  assign( paste0("surv.all.coef.", i), spline_remove_null( eval(parse(text=paste0("surv.all.coef.", i))) ) ) # list of df
-  
+  assign( paste0("surv.all.coef.", i), lapply(eval(parse(text=paste0("surv.all.raw.", i))), function(x) { coef(summary(x)) }) ) # list of df
   assign( paste0("surv.m.coef.", i),   lapply(eval(parse(text=paste0("surv.m.raw.", i))), function(x) { coef(summary(x)) }) ) # list of df
   assign( paste0("surv.f.coef.", i),   lapply(eval(parse(text=paste0("surv.f.raw.", i))), function(x) { coef(summary(x)) }) ) # list of df
   assign( paste0("surv.pir.above.coef.", i),  lapply(eval(parse(text=paste0("surv.pir.above.raw.", i))),  function(x) { coef(summary(x)) }) ) # list of df
@@ -737,7 +717,7 @@ for (i in 1:length(AvailableSeries)) {
   assign( paste0("surv.race.white.coef.", i), lapply(eval(parse(text=paste0("surv.race.white.raw.", i))), function(x) { coef(summary(x)) }) ) # list of df
   assign( paste0("surv.race.black.coef.", i), lapply(eval(parse(text=paste0("surv.race.black.raw.", i))), function(x) { coef(summary(x)) }) ) # list of df
   
-  assign( paste0("surv.all.", i),        annotate(xwas2df(eval(parse(text=paste0("surv.all.coef.", i))), spline=T ))) 
+  assign( paste0("surv.all.", i),        annotate(xwas2df(eval(parse(text=paste0("surv.all.coef.", i))))) )
   assign( paste0("surv.m.", i),          annotate(xwas2df(eval(parse(text=paste0("surv.m.coef.", i))))) )
   
   ifelse(length(eval(parse(text=paste0("surv.f.coef.", i)))) > 0, 
@@ -764,14 +744,14 @@ Do `metafor` analysis but first create some wrapper functions to process each su
 xmeta <- function(x) {
   #print(x)
   tmp <- c()
-  for (i in c(1:6)) {
+  for (i in 1:6) {
     tmp <- c(tmp, eval(parse(text=paste0(x, i)))$var)
   }
   meta.beta <- data.frame(var=unique(tmp))
   meta.se <- data.frame(var=unique(tmp))
 
   MissingSeries <- c()
-  for (i in c(1:6)) {
+  for (i in 1:6) {
     if ( length(eval(parse(text=paste0(x, i)))) == 8 ) {
       suppressWarnings( meta.beta <- merge(meta.beta, eval(parse(text=paste0(x, i)))[, c("beta", "var")], by="var", all.x=T) )
       suppressWarnings( meta.se <- merge(meta.se, eval(parse(text=paste0(x, i)))[, c("se", "var")], by="var", all.x=T) )
@@ -911,175 +891,12 @@ surv.race.latin.meta.sig <- subset(surv.race.latin.meta, q < 0.05)
 #View(surv.race.white.meta.sig[!(row.names(surv.race.white.meta.sig) %in% c(row.names(surv.race.black.meta.sig), row.names(surv.race.latin.meta.sig))), ]) # vars UNIQUE to white
 #View(surv.race.black.meta.sig[!(row.names(surv.race.black.meta.sig) %in% c(row.names(surv.race.white.meta.sig), row.names(surv.race.latin.meta.sig))), ]) # vars UNIQUE to black
 #View(surv.race.latin.meta.sig[!(row.names(surv.race.latin.meta.sig) %in% c(row.names(surv.race.white.meta.sig), row.names(surv.race.black.meta.sig))), ]) # vars UNIQUE to latin
-
-#View(surv.all.meta.sig)
-#View(surv.m.meta.sig[(row.names(surv.m.meta.sig) %in% row.names(surv.all.meta.sig)), ]) # men
-#View(surv.f.meta.sig[(row.names(surv.f.meta.sig) %in% row.names(surv.all.meta.sig)), ]) # women
-#View(surv.age.above.meta.sig[(row.names(surv.age.above.meta.sig) %in% row.names(surv.all.meta.sig)), ]) # old
-#View(surv.age.below.meta.sig[(row.names(surv.age.below.meta.sig) %in% row.names(surv.all.meta.sig)), ]) # young
-#View(surv.pir.above.meta.sig[(row.names(surv.pir.above.meta.sig) %in% row.names(surv.all.meta.sig)), ]) # rich
-#View(surv.pir.below.meta.sig[(row.names(surv.pir.below.meta.sig) %in% row.names(surv.all.meta.sig)), ]) # poor
-#View(surv.race.white.meta.sig[(row.names(surv.race.white.meta.sig) %in% c(row.names(surv.all.meta.sig), row.names(surv.all.meta.sig))), ]) # white
-#View(surv.race.black.meta.sig[(row.names(surv.race.black.meta.sig) %in% c(row.names(surv.all.meta.sig), row.names(surv.all.meta.sig))), ]) # black
-#View(surv.race.latin.meta.sig[(row.names(surv.race.latin.meta.sig) %in% c(row.names(surv.all.meta.sig), row.names(surv.all.meta.sig))), ]) # latin
 ```
-
-
-```{r}
-spline_fill <- function(results, df) {
-  header <- colnames(results)
-  results <- cbind(results, apply(MainTable.2[, rownames(results)], 2, function(x) { round(mean(x, na.rm=T), digits=3) })) 
-  results <- cbind(results, apply(MainTable.2[, rownames(results)], 2, function(x) { round(sd(x, na.rm=T), digits=3) })) 
-  
-  results <- cbind(results, 0)
-  colnames(results) <- c(header, "mean", "sd", "min")
-  
-  for (x in rownames(results)) {
-    spline.est <- 0
-    
-    if (!is.null(surv.all.raw.spline[[x]])) {
-      spline.est <- round(min(exp(predict(surv.all.raw.spline[[x]], dsn.all$variables[, c(adjustfor, x)], type="terms", terms=1)), na.rm=T), digits=3)
-    }
-    results[x, "min"] <- spline.est
-  }
-  
-  return(results)
-}
-```
-
-
-Plot the hazard ratios versus sub-strata HRs.
-
-```{r}
-cc <- c("blue", "red", "green")
-```
-
-```{r}
-# sex sub-strata
-sub.m <- merge(surv.all.meta.sig[, c(1,2)], surv.m.meta[, c(1,2)], by="row.names", all.x=T)
-sub.f <- merge(surv.all.meta.sig[, c(1,2)], surv.f.meta[, c(1,2)], by="row.names", all.x=T)
-plot(sub.m$Effect.x, sub.m$Effect.y, pch=20, xlim=c(0,2), ylim=c(0,2), frame.plot=F, col=cc[1],
-                                          xlab="Unified HR", ylab="Sub-strata HR (Sex)")
-points(sub.f$Effect.x, sub.f$Effect.y, pch=20, col=cc[2])
-abline(0, 1, col="gray60", lty=2)
-legend("topleft", bty="n", pch=20, col=cc,
-       legend=c(as.expression(bquote(paste("Male ", rho, "=", .(round(cor(sub.m$Effect.x, sub.m$Effect.y, method="spearman"), digits=2))))),
-                as.expression(bquote(paste("Female ", rho, "=", .(round(cor(sub.f$Effect.x, sub.f$Effect.y, method="spearman"), digits=2))))))
-       )
-```
-
-```{r}
-# sex vs sex
-sub.sex <- merge(surv.m.meta[, c(1,2)], surv.f.meta[, c(1,2)], by="row.names")
-sub.sex.m <- subset(sub.sex, sub.sex$Row.names %in% rownames(surv.m.meta.sig))
-sub.sex.f <- subset(sub.sex, sub.sex$Row.names %in% rownames(surv.f.meta.sig))
-plot(sub.sex$Effect.x, sub.sex$Effect.y, pch=20, xlim=c(0,2), ylim=c(0,2), frame.plot=F, col=rgb(0,0,0, 0.5),
-                                          xlab="Male HR", ylab="Female HR")
-abline(0, 1, col="gray60", lty=2)
-points(sub.sex.m$Effect.x, sub.sex.m$Effect.y, pch=20, col=cc[1])
-points(sub.sex.f$Effect.x, sub.sex.f$Effect.y, pch=20, col=cc[2])
-legend("topleft", bty="n", pch=20, col=cc, legend=c("Male", "Female") )
-text(0.5, 1, as.expression(bquote(paste(rho, "=", .(round(cor(sub.sex$Effect.x, sub.sex$Effect.y, method="spearman"), digits=2))))))
-```
-
-```{r}
-# age sub-strata
-sub.age.a <- merge(surv.all.meta.sig[, c(1,2)], surv.age.above.meta[, c(1,2)], by="row.names", all.x=T)
-sub.age.b <- merge(surv.all.meta.sig[, c(1,2)], surv.age.below.meta[, c(1,2)], by="row.names", all.x=T)
-plot(sub.age.a$Effect.x, sub.age.a$Effect.y, pch=20, xlim=c(0,2), ylim=c(0,2), frame.plot=F, col=cc[1],
-                                          xlab="Unified HR", ylab="Sub-strata HR (Age)")
-points(sub.age.b$Effect.x, sub.age.b$Effect.y, pch=20, col=cc[2])
-abline(0, 1, col="gray60", lty=2)
-legend("topleft", bty="n", pch=20, col=cc,
-       legend=c(as.expression(bquote(paste("65+ ", rho, "=", .(round(cor(sub.age.a$Effect.x, sub.age.a$Effect.y, method="spearman"), digits=2))))),
-                as.expression(bquote(paste("<65 ", rho, "=", .(round(cor(sub.age.b$Effect.x, sub.age.b$Effect.y, method="spearman"), digits=2))))))
-       )
-```
-
-```{r}
-# young v old
-sub.age <- merge(surv.age.below.meta[, c(1,2)], surv.age.above.meta[, c(1,2)], by="row.names")
-sub.age.b <- subset(sub.age, sub.age$Row.names %in% rownames(surv.age.below.meta.sig))
-sub.age.a <- subset(sub.age, sub.age$Row.names %in% rownames(surv.age.above.meta.sig))
-plot(sub.age$Effect.x, sub.age$Effect.y, pch=20, xlim=c(0,2), ylim=c(0,2), frame.plot=F, col=rgb(0,0,0, 0.5),
-                                          xlab="Younger HR (<65)", ylab="Older HR (65+)")
-abline(0, 1, col="gray60", lty=2)
-points(sub.age.b$Effect.x, sub.age.b$Effect.y, pch=20, col=cc[1])
-points(sub.age.a$Effect.x, sub.age.a$Effect.y, pch=20, col=cc[2])
-legend("topleft", bty="n", pch=20, col=cc, legend=c("Younger (<65)", "Older (65+)") )
-text(0.6, 1.5, as.expression(bquote(paste(rho, "=", .(round(cor(sub.age$Effect.x, sub.age$Effect.y, method="spearman"), digits=2))))))
-```
-
-```{r}
-# pir sub-strata
-sub.pir.a <- merge(surv.all.meta.sig[, c(1,2)], surv.pir.above.meta[, c(1,2)], by="row.names", all.x=T)
-sub.pir.b <- merge(surv.all.meta.sig[, c(1,2)], surv.pir.below.meta[, c(1,2)], by="row.names", all.x=T)
-plot(sub.pir.a$Effect.x, sub.pir.a$Effect.y, pch=20, xlim=c(0,2), ylim=c(0,2), frame.plot=F, col=cc[1],
-                                          xlab="Unified HR", ylab="Sub-strata HR (Poverty:Income, PIR)")
-points(sub.pir.b$Effect.x, sub.pir.b$Effect.y, pch=20, col=cc[2])
-abline(0, 1, col="gray60", lty=2)
-legend("topleft", bty="n", pch=20, col=cc,
-       legend=c(as.expression(bquote(paste("PIR > 1 ", rho, "=", .(round(cor(sub.pir.a$Effect.x, sub.pir.a$Effect.y, method="spearman", use="complete.obs"), digits=2))))),
-                as.expression(bquote(paste("PIR < 1 ", rho, "=", .(round(cor(sub.pir.b$Effect.x, sub.pir.b$Effect.y, method="spearman"), digits=2))))))
-       )
-```
-
-```{r}
-# poor v rich
-sub.pir <- merge(surv.pir.below.meta[, c(1,2)], surv.pir.above.meta[, c(1,2)], by="row.names")
-sub.pir.b <- subset(sub.age, sub.age$Row.names %in% rownames(surv.pir.below.meta.sig))
-sub.pir.a <- subset(sub.age, sub.age$Row.names %in% rownames(surv.pir.above.meta.sig))
-plot(sub.pir$Effect.x, sub.pir$Effect.y, pch=20, xlim=c(0,2), ylim=c(0,2), frame.plot=F, col=rgb(0,0,0, 0.5),
-                                          xlab="Below Poverty:Income HR (PIR < 1)", ylab="Above Poverty:Income HR (PIR > 1)")
-abline(0, 1, col="gray60", lty=2)
-points(sub.pir.b$Effect.x, sub.pir.b$Effect.y, pch=20, col=cc[1])
-points(sub.pir.a$Effect.x, sub.pir.a$Effect.y, pch=20, col=cc[2])
-legend("topleft", bty="n", pch=20, col=cc, legend=c("PIR < 1", "PIR > 1") )
-text(0.75, 1.3, as.expression(bquote(paste(rho, "=", .(round(cor(sub.pir$Effect.x, sub.pir$Effect.y, method="spearman"), digits=2))))))
-```
-
-```{r}
-# race sub-strata
-sub.race.a <- merge(surv.all.meta.sig[, c(1,2)], surv.race.white.meta[, c(1,2)], by="row.names", all.x=T)
-sub.race.b <- merge(surv.all.meta.sig[, c(1,2)], surv.race.black.meta[, c(1,2)], by="row.names", all.x=T)
-sub.race.c <- merge(surv.all.meta.sig[, c(1,2)], surv.race.latin.meta[, c(1,2)], by="row.names", all.x=T)
-plot(sub.race.a$Effect.x, sub.race.a$Effect.y, pch=20, xlim=c(0,2), ylim=c(0,2), frame.plot=F, col=cc[1],
-                                          xlab="Unified HR", ylab="Sub-strata HR (Race)")
-points(sub.race.b$Effect.x, sub.race.b$Effect.y, pch=20, col=cc[2])
-points(sub.race.c$Effect.x, sub.race.c$Effect.y, pch=20, col=cc[3])
-abline(0, 1, col="gray60", lty=2)
-legend("topleft", bty="n", pch=20, col=cc,
-       legend=c(as.expression(bquote(paste("White ", rho, "=", .(round(cor(sub.race.a$Effect.x, sub.race.a$Effect.y, method="spearman"), digits=2))))),
-                as.expression(bquote(paste("Black ", rho, "=", .(round(cor(sub.race.b$Effect.x, sub.race.b$Effect.y, method="spearman"), digits=2))))),
-                as.expression(bquote(paste("Mexican-American ", rho, "=", .(round(cor(sub.race.c$Effect.x, sub.race.c$Effect.y, method="spearman"), digits=2))))))
-       )
-```
-```{r}
-# racial
-sub.race.1 <- merge(surv.race.white.meta[, c(1,2)], surv.race.black.meta[, c(1,2)], by="row.names")
-sub.race.2 <- merge(surv.race.white.meta[, c(1,2)], surv.race.latin.meta[, c(1,2)], by="row.names")
-
-sub.race.b <- subset(sub.race.1, sub.race.1$Row.names %in% rownames(surv.race.black.meta.sig))
-sub.race.l <- subset(sub.race.2, sub.race.2$Row.names %in% rownames(surv.race.latin.meta.sig))
-plot(sub.race.1$Effect.x, sub.race.1$Effect.y, pch=20, xlim=c(0,2), ylim=c(0,2), frame.plot=F, col=rgb(0,0,1, 0.2),
-                                          xlab="White HR", ylab="Minority HR")
-points(sub.race.2$Effect.x, sub.race.2$Effect.y, pch=20, col=rgb(1,0,0, 0.2))
-
-abline(0, 1, col="gray60", lty=2)
-points(sub.race.b$Effect.x, sub.race.b$Effect.y, pch=20, col=cc[1])
-points(sub.race.l$Effect.x, sub.race.l$Effect.y, pch=20, col=cc[2])
-legend("topleft", bty="n", pch=20, col=cc,
-       legend=c(as.expression(bquote(paste("Black (vs White) ", rho, "=", .(round(cor(sub.race.1$Effect.x, sub.race.1$Effect.y, method="spearman"), digits=2))))),
-                as.expression(bquote(paste("Mexican-American (vs White) ", rho, "=", .(round(cor(sub.race.2$Effect.x, sub.race.2$Effect.y, method="spearman"), digits=2)))))))
-```
-
-
 
 Collate case analyses, run each line separately as appropriate.
 
 ```{r eval=FALSE}
 surv.all.meta.base <- surv.all.meta
-
 surv.all.meta.outliers <- surv.all.meta # will fail on sub analysis but not relevant for this figure
 surv.all.meta.chronic <- surv.all.meta
 surv.all.meta.visits <- surv.all.meta
@@ -1106,7 +923,6 @@ df.outliers[is.na(df.outliers)] <- 0
 colnames(df.outliers) <- c("vars", "base", "outliers")
 plot(outliers ~ base, data=df.outliers, xlim=c(0,2), ylim=c(0,2), xlab="Base", ylab="+/- 5%", main="Removing +/- 5% Values", frame.plot=F, pch=20)
 abline(0, 1, col="gray60", lty=2)
-text(0.5, 1.5, bquote(paste(rho, "=", .(round(cor(df.outliers$base, df.outliers$outliers, method="spearman"), digits=2)) ))) 
 
 # case 2 chronic 
 df.chronic <- data.frame(vars=union(rownames(surv.all.meta.base), rownames(surv.all.meta.chronic)), stringsAsFactors=F)
@@ -1126,7 +942,6 @@ df.chronic[is.na(df.chronic)] <- 0
 colnames(df.chronic) <- c("vars", "base", "chronic")
 plot(chronic ~ base, data=df.chronic, xlim=c(0,2), ylim=c(0,2), xlab="Base", ylab="Chronic", main="Removing Chronic Disease", frame.plot=F, pch=20)
 abline(0, 1, col="gray60", lty=2)
-text(0.5, 1.5, bquote(paste(rho, "=", .(round(cor(df.chronic$base, df.chronic$chronic, method="spearman"), digits=2)) ))) 
 
 # case 3 remove people who used healthcare in the past year
 df.visits <- data.frame(vars=union(rownames(surv.all.meta.base), rownames(surv.all.meta.visits)), stringsAsFactors=F)
@@ -1146,7 +961,6 @@ df.visits[is.na(df.visits)] <- 0
 colnames(df.visits) <- c("vars", "base", "visits")
 plot(visits ~ base, data=df.visits, xlim=c(0,2), ylim=c(0,2), xlab="Base", ylab="Visits", main="Removing People w/Healthcare Last Year", frame.plot=F, pch=20)
 abline(0, 1, col="gray60", lty=2)
-text(0.5, 1.5, bquote(paste(rho, "=", .(round(cor(df.visits$base, df.visits$visits, method="spearman"), digits=2)) ))) 
 
 # case 4 combine 1 through 3
 df.all <- data.frame(vars=union(rownames(surv.all.meta.base), rownames(surv.all.meta.all)), stringsAsFactors=F)
@@ -1166,15 +980,13 @@ df.all[is.na(df.all)] <- 0
 colnames(df.all) <- c("vars", "base", "all")
 plot(all ~ base, data=df.all, xlim=c(0,3), ylim=c(0,3), xlab="Base", ylab="All", main="Combined", frame.plot=F, pch=20)
 abline(0, 1, col="gray60", lty=2)
-text(2.5, 1.5, bquote(paste(rho, "=", .(round(cor(df.all$base, df.all$all, method="spearman"), digits=2)) ))) 
 
 ### combined
-plot(all ~ base, data=df.all, xlim=c(0,3), ylim=c(0,3), xlab="Base HR", ylab="Metric HR", main="Substratified Health Indicators", frame.plot=F, pch=20, col=rgb(0,0,0, .1))
+plot(all ~ base, data=df.all, xlim=c(0,3), ylim=c(0,3), xlab="Base HR", ylab="Metric HR", main="Substratified Health Indicators", frame.plot=F, pch=20, col=rgb(0,0,0, .3))
+points(visits ~ base, data=df.visits, pch=20, col=rgb(.2,.8,.2, .3))
+points(chronic ~ base, data=df.chronic, pch=20, col=rgb(1,.65,0, .3))
+points(outliers ~ base, data=df.outliers, pch=20, col=rgb(0,0,1, .3))
 abline(0, 1, col="gray60", lty=2)
-points(visits ~ base, data=df.visits, pch=20, col=rgb(.2,.8,.2, .1))
-points(chronic ~ base, data=df.chronic, pch=20, col=rgb(1,.65,0, .1))
-points(outliers ~ base, data=df.outliers, pch=20, col=rgb(0,0,1, .1))
-
 legend("topright", legend=c("Combined", "Visits", "Chronic", "Outliers"), col=c(rgb(0,0,0, .5), rgb(.2,.8,.2, .5), rgb(1,.65,0, .5), rgb(0,0,1, .5)), pch=20, box.lwd=0, box.col="white", bg="white")
 ```
 
@@ -1204,6 +1016,117 @@ metaforest(surv.race.latin.meta.raw, group="race", group_desc="Race (Mexican-Ame
 
 ###
 # Supplemental Figures
+
+Create UpSetR visualizations for comorbidities across time cohorts.
+
+```{r}
+# create space of all comorbidities found across everything ever
+com.list.all <- c()
+com.list.m   <- c()
+com.list.f   <- c()
+com.list.pir.above  <- c()
+com.list.pir.below  <- c()
+com.list.age.above  <- c()
+com.list.age.below  <- c()
+com.list.race.latin <- c()
+com.list.race.white <- c()
+com.list.race.black <- c()
+
+for (i in 1:length(AvailableSeries)) {
+  com.list.all <- union( com.list.all, rownames(eval(parse(text=paste0("surv.all.sig.", i)))) )
+  com.list.m   <- union( com.list.m,   rownames(eval(parse(text=paste0("surv.m.sig.",   i)))) )
+  com.list.f   <- union( com.list.f,   rownames(eval(parse(text=paste0("surv.f.sig.",   i)))) )
+  com.list.pir.above  <- union( com.list.pir.above,  rownames(eval(parse(text=paste0("surv.pir.above.sig.",  i)))) )
+  com.list.pir.below  <- union( com.list.pir.below,  rownames(eval(parse(text=paste0("surv.pir.below.sig.",  i)))) )
+  com.list.age.above  <- union( com.list.age.above,  rownames(eval(parse(text=paste0("surv.age.above.sig.",  i)))) )
+  com.list.age.below  <- union( com.list.age.below,  rownames(eval(parse(text=paste0("surv.age.below.sig.",  i)))) )
+  com.list.race.latin <- union( com.list.race.latin, rownames(eval(parse(text=paste0("surv.race.latin.sig.", i)))) )
+  com.list.race.white <- union( com.list.race.white, rownames(eval(parse(text=paste0("surv.race.white.sig.", i)))) )
+  com.list.race.black <- union( com.list.race.black, rownames(eval(parse(text=paste0("surv.race.black.sig.", i)))) )
+}
+
+# create a list of booleans for presence of each time cohort in the union list of all comorbidities
+com.df.all <- data.frame(com.list.all, stringsAsFactors=F)
+com.df.m   <- data.frame(com.list.m,   stringsAsFactors=F)
+com.df.f   <- data.frame(com.list.f,   stringsAsFactors=F)
+com.df.pir.above  <- data.frame(com.list.pir.above,  stringsAsFactors=F)
+com.df.pir.below  <- data.frame(com.list.pir.below,  stringsAsFactors=F)
+com.df.age.above  <- data.frame(com.list.age.above,  stringsAsFactors=F)
+com.df.age.below  <- data.frame(com.list.age.below,  stringsAsFactors=F)
+com.df.race.latin <- data.frame(com.list.race.latin, stringsAsFactors=F)
+com.df.race.white <- data.frame(com.list.race.white, stringsAsFactors=F)
+com.df.race.black <- data.frame(com.list.race.black, stringsAsFactors=F)
+
+for (i in 1:length(AvailableSeries)) {
+  com.df.all <- cbind( com.df.all, com.list.all %in% rownames(eval(parse(text=paste0("surv.all.sig.", i)))) )
+  com.df.m   <- cbind( com.df.m,   com.list.m   %in% rownames(eval(parse(text=paste0("surv.m.sig.",   i)))) )
+  com.df.f   <- cbind( com.df.f,   com.list.f   %in% rownames(eval(parse(text=paste0("surv.f.sig.",   i)))) )
+  com.df.pir.above  <- cbind( com.df.pir.above, com.list.pir.above   %in% rownames(eval(parse(text=paste0("surv.pir.above.sig.",  i)))) )
+  com.df.pir.below  <- cbind( com.df.pir.below, com.list.pir.below   %in% rownames(eval(parse(text=paste0("surv.pir.below.sig.",  i)))) )
+  com.df.age.above  <- cbind( com.df.age.above, com.list.age.above   %in% rownames(eval(parse(text=paste0("surv.age.above.sig.",  i)))) )
+  com.df.age.below  <- cbind( com.df.age.below, com.list.age.below   %in% rownames(eval(parse(text=paste0("surv.age.below.sig.",  i)))) )
+  com.df.race.latin <- cbind( com.df.race.latin, com.list.race.latin %in% rownames(eval(parse(text=paste0("surv.race.latin.sig.", i)))) )
+  com.df.race.white <- cbind( com.df.race.white, com.list.race.white %in% rownames(eval(parse(text=paste0("surv.race.white.sig.", i)))) )
+  com.df.race.black <- cbind( com.df.race.black, com.list.race.black %in% rownames(eval(parse(text=paste0("surv.race.black.sig.", i)))) )
+}
+
+# convert from boolean to 1 and 0 for UpSetR processing
+com.df.all[, sapply(com.df.all, is.logical)] <- lapply(com.df.all[, sapply(com.df.all, is.logical)],   as.numeric)
+com.df.m[,   sapply(com.df.m,   is.logical)] <- lapply(com.df.m[,   sapply(com.df.m,   is.logical)],   as.numeric)
+com.df.f[,   sapply(com.df.f,   is.logical)] <- lapply(com.df.f[,   sapply(com.df.f,   is.logical)],   as.numeric)
+com.df.pir.above[,  sapply(com.df.pir.above,  is.logical)] <- lapply(com.df.pir.above[,  sapply(com.df.pir.above,  is.logical)], as.numeric)
+com.df.pir.below[,  sapply(com.df.pir.below,  is.logical)] <- lapply(com.df.pir.below[,  sapply(com.df.pir.below,  is.logical)], as.numeric)
+com.df.age.above[,  sapply(com.df.age.above,  is.logical)] <- lapply(com.df.age.above[,  sapply(com.df.age.above,  is.logical)], as.numeric)
+com.df.age.below[,  sapply(com.df.age.below,  is.logical)] <- lapply(com.df.age.below[,  sapply(com.df.age.below,  is.logical)], as.numeric)
+com.df.race.latin[, sapply(com.df.race.latin, is.logical)] <- lapply(com.df.race.latin[, sapply(com.df.race.latin, is.logical)], as.numeric)
+com.df.race.white[, sapply(com.df.race.white, is.logical)] <- lapply(com.df.race.white[, sapply(com.df.race.white, is.logical)], as.numeric)
+com.df.race.black[, sapply(com.df.race.black, is.logical)] <- lapply(com.df.race.black[, sapply(com.df.race.black, is.logical)], as.numeric)
+
+com.df.colnames <- c("Co-morbidity", AvailableSeries)
+colnames(com.df.all) <- com.df.colnames
+colnames(com.df.m)   <- com.df.colnames
+colnames(com.df.f)   <- com.df.colnames
+colnames(com.df.pir.above)  <- com.df.colnames
+colnames(com.df.pir.below)  <- com.df.colnames
+colnames(com.df.age.above)  <- com.df.colnames
+colnames(com.df.age.below)  <- com.df.colnames
+colnames(com.df.race.latin) <- com.df.colnames
+colnames(com.df.race.white) <- com.df.colnames
+colnames(com.df.race.black) <- com.df.colnames
+
+# UpSetR metadata
+usr.lbl.all <- data.frame(sets=colnames(com.df.all[2:ncol(com.df.all)]), CoM=unlist(strsplit(toString(apply(com.df.all[, 2:ncol(com.df.all)], 2, sum), row.names=NULL), ",")), stringsAsFactors=F)
+usr.lbl.m   <- data.frame(sets=colnames(com.df.m[2:ncol(com.df.m)]), CoM=unlist(strsplit(toString(apply(com.df.m[,   2:ncol(com.df.m)],   2, sum), row.names=NULL), ",")), stringsAsFactors=F)
+usr.lbl.f   <- data.frame(sets=colnames(com.df.f[2:ncol(com.df.f)]), CoM=unlist(strsplit(toString(apply(com.df.f[,   2:ncol(com.df.f)],   2, sum), row.names=NULL), ",")), stringsAsFactors=F)
+usr.lbl.pir.above  <- data.frame(sets=colnames(com.df.pir.above[2:ncol(com.df.pir.above)]), CoM=unlist(strsplit(toString(apply(com.df.pir.above[,  2:ncol(com.df.pir.above)],  2, sum), row.names=NULL), ",")), stringsAsFactors=F)
+usr.lbl.pir.below  <- data.frame(sets=colnames(com.df.pir.below[2:ncol(com.df.pir.below)]), CoM=unlist(strsplit(toString(apply(com.df.pir.below[,  2:ncol(com.df.pir.below)],  2, sum), row.names=NULL), ",")), stringsAsFactors=F)
+usr.lbl.age.above  <- data.frame(sets=colnames(com.df.age.above[2:ncol(com.df.age.above)]), CoM=unlist(strsplit(toString(apply(com.df.age.above[,  2:ncol(com.df.age.above)],  2, sum), row.names=NULL), ",")), stringsAsFactors=F)
+usr.lbl.age.below  <- data.frame(sets=colnames(com.df.age.below[2:ncol(com.df.age.below)]), CoM=unlist(strsplit(toString(apply(com.df.age.below[,  2:ncol(com.df.age.below)],  2, sum), row.names=NULL), ",")), stringsAsFactors=F)
+usr.lbl.race.latin <- data.frame(sets=colnames(com.df.race.latin[2:ncol(com.df.race.latin)]), CoM=unlist(strsplit(toString(apply(com.df.race.latin[, 2:ncol(com.df.race.latin)], 2, sum), row.names=NULL), ",")), stringsAsFactors=F)
+usr.lbl.race.white <- data.frame(sets=colnames(com.df.race.white[2:ncol(com.df.race.white)]), CoM=unlist(strsplit(toString(apply(com.df.race.white[, 2:ncol(com.df.race.white)], 2, sum), row.names=NULL), ",")), stringsAsFactors=F)
+usr.lbl.race.black <- data.frame(sets=colnames(com.df.race.black[2:ncol(com.df.race.black)]), CoM=unlist(strsplit(toString(apply(com.df.race.black[, 2:ncol(com.df.race.black)], 2, sum), row.names=NULL), ",")), stringsAsFactors=F)
+
+# visualize with UpSetR
+upset(com.df.all, sets=c(rev(AvailableSeries)), keep.order=T, order.by="freq", sets.x.label="Significant Comorbidities \n (q < 0.05)", mainbar.y.label="Unique Comorbidities \n (All)", set.metadata=list(data=usr.lbl.all, plots=list(list(type="text", column="CoM", assign=10))))
+
+upset(com.df.m, sets=c(rev(AvailableSeries)), keep.order=T, order.by="freq", sets.x.label="Significant Comorbidities \n (q < 0.05)", mainbar.y.label="Unique Comorbidities \n (Male)", set.metadata=list(data=usr.lbl.m, plots=list(list(type="text", column="CoM", assign=10))))
+
+upset(com.df.f, sets=c(rev(AvailableSeries)), keep.order=T, order.by="freq", sets.x.label="Significant Comorbidities \n (q < 0.05)", mainbar.y.label="Unique Comorbidities \n (Female)", set.metadata=list(data=usr.lbl.f, plots=list(list(type="text", column="CoM", assign=10))))
+
+upset(com.df.age.above, sets=c(rev(AvailableSeries)), keep.order=T, order.by="freq", sets.x.label="Significant Comorbidities \n (q < 0.05)", mainbar.y.label="Unique Comorbidities \n (Age > 65)", set.metadata=list(data=usr.lbl.age.above, plots=list(list(type="text", column="CoM", assign=10))))
+
+upset(com.df.age.below, sets=c(rev(AvailableSeries)), keep.order=T, order.by="freq", sets.x.label="Significant Comorbidities \n (q < 0.05)", mainbar.y.label="Unique Comorbidities \n (Age < 65)", set.metadata=list(data=usr.lbl.age.below, plots=list(list(type="text", column="CoM", assign=10))))
+
+upset(com.df.pir.above, sets=c(rev(AvailableSeries)), keep.order=T, order.by="freq", sets.x.label="Significant Comorbidities \n (q < 0.05)", mainbar.y.label="Unique Comorbidities \n (PIR > 1)", set.metadata=list(data=usr.lbl.pir.above, plots=list(list(type="text", column="CoM", assign=10))))
+
+upset(com.df.pir.below, sets=c(rev(AvailableSeries)), keep.order=T, order.by="freq", sets.x.label="Significant Comorbidities \n (q < 0.05)", mainbar.y.label="Unique Comorbidities \n (PIR < 1)", set.metadata=list(data=usr.lbl.pir.below, plots=list(list(type="text", column="CoM", assign=10))))
+
+upset(com.df.race.white, sets=c(rev(AvailableSeries)), keep.order=T, order.by="freq", sets.x.label="Significant Comorbidities \n (q < 0.05)", mainbar.y.label="Unique Comorbidities \n (White)", set.metadata=list(data=usr.lbl.race.white, plots=list(list(type="text", column="CoM", assign=10))))
+
+upset(com.df.race.black, sets=c(rev(AvailableSeries)), keep.order=T, order.by="freq", sets.x.label="Significant Comorbidities \n (q < 0.05)", mainbar.y.label="Unique Comorbidities \n (Black)", set.metadata=list(data=usr.lbl.race.black, plots=list(list(type="text", column="CoM", assign=10))))
+
+upset(com.df.race.latin, sets=c(rev(AvailableSeries)), keep.order=T, order.by="freq", sets.x.label="Significant Comorbidities \n (q < 0.05)", mainbar.y.label="Unique Comorbidities \n (Mexican-American)", set.metadata=list(data=usr.lbl.race.latin, plots=list(list(type="text", column="CoM", assign=10))))
+```
 
 Extra supplemental figures of volcano plots of all concatenated original regressions results across cohort years with the FDR significant highlighted at each cohort in orange and red for those that are ultimately meta-analysis significant across cohort years.
 
@@ -1268,7 +1191,7 @@ par(mfrow=c(1,1))
 #dev.off()
 ```
 
-Heatmap for only the 45 significant measures for mortality.
+Heatmap for only the 30 significant measures for mortality.
 
 ```{r}
 baseline.heat <- FinalVariableList.heat[rownames(FinalVariableList.heat) %in% rownames(surv.all.meta.sig), colnames(FinalVariableList.heat) %in% rownames(surv.all.meta.sig)]
@@ -1276,7 +1199,7 @@ baseline.heat <- FinalVariableList.heat[rownames(FinalVariableList.heat) %in% ro
 pheatmap(baseline.heat, fontsize_row=5, fontsize_col=5, annotation_row=annotation, annotation_col=annotation, annotation_colors=annotation_colors, legend=T, annotation_legend=T, show_rownames=T, show_colnames=T, breaks=seq(-1,1,by=0.1), color=colorRampPalette(rev(brewer.pal(n=11, name="RdYlBu")))(20))
 ```
 
-Test significant list for r^2 values for all comorbidities.
+Now test your significant list for r^2 values for all comorbidities.
 
 ```{r}
 nagelkerke <- list()
@@ -1393,6 +1316,29 @@ legend("bottomleft", c("White", "Black", "Mexican-American"), lty=c(1, 1), col=c
 
 *** Additional visualizations ***
 
+Visualize these effects by gender.
+
+```{r eval=FALSE}
+com.super.gender <- merge(com.all, surv.m.sig[, c("beta", "var")], by.x="var", by.y="var", all.x=T, suffixes=c("", ".m"))
+com.super.gender <- merge(com.super.gender, surv.f.sig[, c("beta", "var")], by.x="var", by.y="var", all.x=T, suffixes=c("", ".f"))
+
+plot(com.super.gender$beta.m, com.super.gender$beta.f, 
+     xlab="Male", ylab="Female",
+     frame.plot=F, xlim=c(-0.6, 0.6), ylim=c(-0.6, 0.6), pch=20)
+
+abline(0, 1, col="gray60", lty=2)
+
+points(subset(com.super.gender, var %in% com.m.only$var)$beta.m, subset(com.super.gender, var %in% com.m.only$var)$beta.f
+       , col="blue", pch=20) # male only points
+points(subset(com.super.gender, var %in% com.f.only$var)$beta.m, subset(com.super.gender, var %in% com.f.only$var)$beta.f
+       , col="pink", pch=20) # female only points
+
+text(subset(com.super.gender, var %in% com.m.only$var)$beta.m, subset(com.super.gender, var %in% com.m.only$var)$beta.f
+     , labels=subset(com.super.gender, var %in% com.m.only$var)$var_desc, col="blue", cex=0.4, adj=c(-0.07,0.4))
+text(subset(com.super.gender, var %in% com.f.only$var)$beta.m, subset(com.super.gender, var %in% com.f.only$var)$beta.f
+     , labels=subset(com.super.gender, var %in% com.f.only$var)$var_desc, col="pink", cex=0.4, adj=c(1.15,0.4))
+```
+
 Supplemental figures of skewness.
 
 ```{r eval=FALSE}
@@ -1404,4 +1350,30 @@ tmp$MORTSTAT <- factor(tmp$MORTSTAT)
 tmp$variable <- factor(tmp$variable)
 tmp$value <- as.numeric(tmp$value)
 boxplot(value ~ MORTSTAT*variable, data=subset(tmp, !is.na(value)))
+```
+
+Do some visualization using venn diagrams (should have loaded `venneuler`).
+
+```{r eval=FALSE}
+library(venneuler)  # venn diagrams 
+MnF   <- table(c(rownames(surv.m.sig),   rownames(surv.f.sig))) > 1
+AnM   <- table(c(rownames(surv.all.sig), rownames(surv.m.sig))) > 1
+AnF   <- table(c(rownames(surv.all.sig), rownames(surv.f.sig))) > 1
+AnMnF <- table(c(rownames(surv.all.sig), rownames(surv.m.sig), rownames(surv.m.sig))) > 2
+
+OnlyA <- rownames(surv.all.sig)[!rownames(surv.all.sig) %in% c(rownames(surv.m.sig), rownames(surv.f.sig))]
+OnlyM <- rownames(surv.m.sig)[!rownames(surv.m.sig) %in% c(rownames(surv.all.sig), rownames(surv.f.sig))]
+OnlyF <- rownames(surv.f.sig)[!rownames(surv.f.sig) %in% c(rownames(surv.all.sig), rownames(surv.m.sig))]
+
+vd <- venneuler(
+    c(
+      All=nrow(surv.all.sig), M=nrow(surv.m.sig), F=nrow(surv.f.sig),
+      "M&F"=length(MnF[MnF]),
+      "All&M"=length(AnM[AnM]),
+      "All&F"=length(AnF[AnF]),
+      "All&M&F"=length(AnMnF[AnMnF])
+    )
+  )
+
+plot(vd)
 ```
