@@ -478,6 +478,21 @@ for (year in names(table(MainTable.cleaned$SDDSRVYR))) {
 Define some supporting functions.
 
 ```{r}
+# adds a list of co-variates to your model formula
+addToBase <- function(base_formula, adjustingVariables) {
+  for (var in adjustingVariables) {
+    if (var == "RIDAGEYR2") {
+      base_formula <- update.formula( base_formula, as.formula('~ . + I(scale(RIDAGEYR)^2)') )
+    } else if (var == "RIAGENDR" || var == "RIDRETH1" || var == "chronic") {
+      base_formula <- update.formula( base_formula, as.formula(sprintf('~ . + %s', var)) )
+    } else {
+      base_formula <- update.formula( base_formula, as.formula(sprintf('~ . + I(scale(%s))', var)) )
+    }
+  }
+  
+  return(base_formula)
+}
+
 # convert xwas return list object to a data.frame with only beta and p-values for each co-variate
 xwas2df <- function(surv) {
   #tmp <- lapply(surv, function(x) { return(x[1, c("exp(coef)", "Pr(>|z|)")]) } ) 
@@ -494,7 +509,7 @@ xwas2df <- function(surv) {
 }
 
 # main workhorse function
-xwas <- function(design=NULL, linear=FALSE) {
+xwas <- function(design=NULL, linear=FALSE, depvar="MORTSTAT", adjfor=NULL) {
   dat <- subset(design, WTMEC2YR > 0)
   total <- nrow(dat)
   
@@ -504,11 +519,15 @@ xwas <- function(design=NULL, linear=FALSE) {
     baseformula <- NULL
     
     if (linear) {
-      baseformula <- as.formula(sprintf('Surv(PERMTH_EXM, MORTSTAT) ~ I(%s) + cluster(area) + I(scale(RIDAGEYR)) + I(scale(RIDAGEYR)^2) + RIAGENDR + I(scale(INDFMPIR)) + I(scale(num_times_health_care)) + I(scale(times_overnight_in_hospital)) + RIDRETH1 + chronic', varname))
+      baseformula <- as.formula(sprintf('Surv(PERMTH_EXM, MORTSTAT) ~ I(%s) + cluster(area)', varname))
     } else {
-      baseformula <- as.formula(sprintf('Surv(PERMTH_EXM, MORTSTAT) ~ pspline(%s, df=2) + cluster(area) + I(scale(RIDAGEYR)) + I(scale(RIDAGEYR)^2) + RIAGENDR + I(scale(INDFMPIR)) + I(scale(num_times_health_care)) + I(scale(times_overnight_in_hospital)) + RIDRETH1 + chronic', varname))
+      # https://cran.r-project.org/web/packages/survival/vignettes/splines.pdf
+      baseformula <- as.formula(sprintf('Surv(PERMTH_EXM, MORTSTAT) ~ pspline(%s, df=4, degree=3) + cluster(area)', varname))
     }
-
+    baseformula <- addToBase(baseformula, adjfor)
+    #print("DEBUG")
+    #print(baseformula)
+    
     n <- sum( xtabs(~eval(as.symbol(depvar)) + eval(as.symbol(varname)), data=dat) )
 
     if (n/total > 0.01) {
@@ -590,10 +609,15 @@ tidyBaseline[, c('term', 'HR', 'conf_int_string', 'p.value')]
 Prove that spline fitting is better than linear for our data using AIC.
 
 ```{r}
-MainTable.cleaned <- subset(MainTable.cleaned, WTMEC2YR > 0)
-surv.all.raw.linear <- xwas(design=MainTable.cleaned, linear=TRUE) 
-surv.all.raw.spline <- xwas(design=MainTable.cleaned)
+dsn.all <- subset(MainTable.cleaned, WTMEC2YR > 0)
+print("*** LINEAR ***")
+surv.all.raw.linear <- xwas(design=dsn.all, linear=TRUE, adjfor=adjustfor) 
+print("\n")
+print("*** SPLINE ***")
+surv.all.raw.spline <- xwas(design=dsn.all, linear=FALSE, adjfor=adjustfor)
 ```
+
+With linear and spline modeling overall, compare the fit of fits using AIC. Non-linear fit is clearly the winner for modeling.
 
 ```{r}
 l_vs_s <- data.frame(linear=NA, spline=NA)
@@ -607,13 +631,16 @@ for (i in set) {
 l_vs_s <- l_vs_s[-1, ]
 l_vs_s$delta <- l_vs_s$linear - l_vs_s$spline
 
-median(l_vs_s$delta, na.rm=TRUE)
-# of the 120 variables the median delta is 564522.15 >>> 10
+nrow(l_vs_s) # 115 variables in common for models
+
+median(l_vs_s$delta, na.rm=TRUE) # of the variables the median delta is 649116.5 >>> 10
 
 library("Rmpfr")
 exp(-1*mpfr(l_vs_s$delta, precBits=4)/2)
 # p(linear is a better model that minimizes information loss) <<< 1e-1000 %
 ```
+
+Dump out all the plots of the spline overall.
 
 ```{r}
 for (x in set) {
@@ -642,42 +669,183 @@ for (x in set) {
 Now do survival analysis for all patients then subsetted by gender, poverty income ratio (PIR), full benefit retirement age (65), and race.
 
 ```{r}
-#surv.all.coef <- lapply(surv.all.raw, function(x) { coef(summary(x)) }) # list of df
-#surv.all.r2 <- lapply(surv.all.raw, function(x) { weightedr2(x) }) # list of df
-#surv.all <- xwas2df(surv.all.coef) # df with beta, p, and q-values
-#surv.all <- annotate(surv.all) # annotate with verbose descriptors
-#surv.all.sig <- subset(surv.all, q < 0.05) # only FDR significant variables
-#surv.all.sig <- surv.all.sig[order(surv.all.sig$beta), ] # sort by effect size
+# to hold all the annual spline xwas results
+dsn.all.spline <- list()
+dsn.m.spline <- list()
+dsn.f.spline <- list()
+dsn.pir.above.spline <- list()
+dsn.pir.below.spline <- list()
+dsn.age.above.spline <- list()
+dsn.age.below.spline <- list()
+dsn.race.white.spline <- list()
+dsn.race.black.spline <- list()
+dsn.race.mexam.spline <- list()
 
-dsn.m <- subset(MainTable.cleaned, RIAGENDR == 'm') # male analysis
-dsn.f <- subset(MainTable.cleaned, RIAGENDR == 'f') # female analysis
+# to hold all the beta parameter estimates per lab test
+dsn.all.est <- list()
+dsn.m.est <- list()
+dsn.f.est <- list()
+dsn.pir.above.est <- list()
+dsn.pir.below.est <- list()
+dsn.age.above.est <- list()
+dsn.age.below.est <- list()
+dsn.race.white.est <- list()
+dsn.race.black.est <- list()
+dsn.race.mexam.est <- list()
 
-dsn.pir.above <- subset(dsn.all, INDFMPIR > 1) # PIR above analysis - WEALTHY
-dsn.pir.below <- subset(dsn.all, INDFMPIR < 1) # PIR below analysis - POVERTY
+# to hold all the standard errors per lab test
+dsn.all.se <- list()
+dsn.m.se <- list()
+dsn.f.se <- list()
+dsn.pir.above.se <- list()
+dsn.pir.below.se <- list()
+dsn.age.above.se <- list()
+dsn.age.below.se <- list()
+dsn.race.white.se <- list()
+dsn.race.black.se <- list()
+dsn.race.mexam.se <- list()
+```
 
-dsn.age.above <- subset(dsn.all, RIDAGEYR >= 65) # age above analysis - OLD
-dsn.age.below <- subset(dsn.all, RIDAGEYR <  65) # age below analysis - YOUNG
-
-dsn.race.latin <- subset(dsn.all, RIDRETH1 == 1) # race analysis - LATIN (only mexican-american)
-dsn.race.white <- subset(dsn.all, RIDRETH1 == 3) # race analysis - WHITE
-dsn.race.black <- subset(dsn.all, RIDRETH1 == 4) # race analysis - BLACK
-
-# for K-M plots
-surv.m.raw <- xwas(design=dsn.m, adjfor=adjustfor[adjustfor != "RIAGENDR"])
-surv.f.raw <- xwas(design=dsn.f, adjfor=adjustfor[adjustfor != "RIAGENDR"])
-
-surv.pir.above.raw <- xwas(design=dsn.pir.above, adjfor=adjustfor[adjustfor != "INDFMPIR"])
-surv.pir.below.raw <- xwas(design=dsn.pir.below, adjfor=adjustfor[adjustfor != "INDFMPIR"])
-
-surv.age.above.raw <- xwas(design=dsn.age.above, adjfor=adjustfor[!(adjustfor %in% c("RIDAGEYR", "RIDAGEYR2"))])
-surv.age.below.raw <- xwas(design=dsn.age.below, adjfor=adjustfor[!(adjustfor %in% c("RIDAGEYR", "RIDAGEYR2"))])
-
-surv.race.latin.raw <- xwas(design=dsn.race.latin, adjfor=adjustfor[adjustfor != "RIDRETH1"])
-surv.race.white.raw <- xwas(design=dsn.race.white, adjfor=adjustfor[adjustfor != "RIDRETH1"])
-surv.race.black.raw <- xwas(design=dsn.race.black, adjfor=adjustfor[adjustfor != "RIDRETH1"])
-
+```{r}
 # cohort analysis - looping through each study year
-AvailableSeries <- names(table( dsn.all$variables$SDDSRVYR ))
+AvailableSeries <- names(table( MainTable.cleaned$SDDSRVYR ))
+for (i in 1:length(AvailableSeries)) {
+  cat("*** Now analyzing", useTheseSeries[i], "series\n")
+  dsn.all <- subset(MainTable.cleaned, WTMEC2YR > 0 & SDDSRVYR == AvailableSeries[i])
+  
+  cat("*** Subsetting cohorts in", useTheseSeries[i], "\n")
+  dsn.m <- subset(dsn.all, RIAGENDR == 'm') # male analysis
+  dsn.f <- subset(dsn.all, RIAGENDR == 'f') # female analysis
+
+  dsn.pir.above <- subset(dsn.all, INDFMPIR > 1) # PIR above analysis - WEALTHY
+  dsn.pir.below <- subset(dsn.all, INDFMPIR < 1) # PIR below analysis - POVERTY
+
+  dsn.age.above <- subset(dsn.all, RIDAGEYR >= 65) # age above analysis - OLD
+  dsn.age.below <- subset(dsn.all, RIDAGEYR <  65) # age below analysis - YOUNG
+
+  dsn.race.white <- subset(dsn.all, RIDRETH1 == "white") # race analysis - WHITE
+  dsn.race.black <- subset(dsn.all, RIDRETH1 == "black") # race analysis - BLACK
+  dsn.race.mexam <- subset(dsn.all, RIDRETH1 == "mexam") # race analysis - LATIN (only mexican-american)
+  
+  cat("*** XWAS cohort in", useTheseSeries[i], ".\n")
+  dsn.all.spline[[i]] <- xwas(design=dsn.all, linear=FALSE, adjfor=adjustfor)
+
+  
+  for (j in names(dsn.all.spline[[i]])) {
+    cat("Calculating HR for", j, "...")
+    tmp <- as.data.frame(dsn.all[, j])
+    rownames(tmp) <- rownames(dsn.all)
+    
+    if (!is.null(dsn.all.spline[[i]][[j]])) {
+      cat(" OK!\n")
+      predicted <- predict(dsn.all.spline[[i]][[j]], x=dsn.all, type="terms", se.fit=T, terms=1)
+      tmp <- merge(tmp, cbind(predicted$fit, predicted$se.fit), by="row.names")
+      tmp <- tmp[, c(2,3,4)]
+      tmp <- tmp[complete.cases(tmp), ]
+      tmp <- tmp[order(tmp[, 1]), ]
+      rownames(tmp) <- 1:nrow(tmp)
+      colnames(tmp) <- c("var", "beta", "se")
+      
+      ## get parameter estimates (and their standard error)
+      z <- seq(-2, 2, by=1)
+      dsn.all.est[[j]] <- rbind(dsn.all.est[[j]], t(predict( sm.spline(tmp$var, tmp$beta), z)))
+      rownames(dsn.all.est[[j]])[nrow(dsn.all.est[[j]])] <- i
+  
+      dsn.all.se[[j]] <- rbind(dsn.all.se[[j]], t(predict( sm.spline(tmp$var, tmp$se), z)))
+      rownames(dsn.all.se[[j]])[nrow(dsn.all.se[[j]])] <- i
+    } else {
+      cat(" NULL\n")
+    }
+  }
+  
+}
+```
+
+```{r}
+# to hold all the beta values per lab test
+dsn.all.meta.beta <- data.frame(matrix(0, nrow=0, ncol=5))
+dsn.m.meta.beta <- data.frame(matrix(0, nrow=0, ncol=5))
+dsn.f.meta.beta <- data.frame(matrix(0, nrow=0, ncol=5))
+dsn.pir.above.meta.beta <- data.frame(matrix(0, nrow=0, ncol=5))
+dsn.pir.below.meta.beta <- data.frame(matrix(0, nrow=0, ncol=5))
+dsn.age.above.meta.beta <- data.frame(matrix(0, nrow=0, ncol=5))
+dsn.age.below.meta.beta <- data.frame(matrix(0, nrow=0, ncol=5))
+dsn.race.white.meta.beta <- data.frame(matrix(0, nrow=0, ncol=5))
+dsn.race.black.meta.beta <- data.frame(matrix(0, nrow=0, ncol=5))
+dsn.race.mexam.meta.beta <- data.frame(matrix(0, nrow=0, ncol=5))
+
+# to hold all the standard errors per lab test
+dsn.all.meta.se <- data.frame(matrix(0, nrow=0, ncol=5))
+dsn.m.meta.se <- data.frame(matrix(0, nrow=0, ncol=5))
+dsn.f.meta.se <- data.frame(matrix(0, nrow=0, ncol=5))
+dsn.pir.above.meta.se <- data.frame(matrix(0, nrow=0, ncol=5))
+dsn.pir.below.meta.se <- data.frame(matrix(0, nrow=0, ncol=5))
+dsn.age.above.meta.se <- data.frame(matrix(0, nrow=0, ncol=5))
+dsn.age.below.meta.se <- data.frame(matrix(0, nrow=0, ncol=5))
+dsn.race.white.meta.se <- data.frame(matrix(0, nrow=0, ncol=5))
+dsn.race.black.meta.se <- data.frame(matrix(0, nrow=0, ncol=5))
+dsn.race.mexam.meta.se <- data.frame(matrix(0, nrow=0, ncol=5))
+
+# to hold all the p-values per lab test
+dsn.all.meta.pval <- data.frame(matrix(0, nrow=0, ncol=5))
+dsn.m.meta.pval <- data.frame(matrix(0, nrow=0, ncol=5))
+dsn.f.meta.pval <- data.frame(matrix(0, nrow=0, ncol=5))
+dsn.pir.above.meta.pval <- data.frame(matrix(0, nrow=0, ncol=5))
+dsn.pir.below.meta.pval <- data.frame(matrix(0, nrow=0, ncol=5))
+dsn.age.above.meta.pval <- data.frame(matrix(0, nrow=0, ncol=5))
+dsn.age.below.meta.pval <- data.frame(matrix(0, nrow=0, ncol=5))
+dsn.race.white.meta.pval <- data.frame(matrix(0, nrow=0, ncol=5))
+dsn.race.black.meta.pval <- data.frame(matrix(0, nrow=0, ncol=5))
+dsn.race.mexam.meta.pval <- data.frame(matrix(0, nrow=0, ncol=5))
+```
+
+```{r}
+for (j in names(dsn.all.est)) {
+  test_beta <- rep(NA, 5)
+  test_se <- rep(NA, 5)
+  test_pval <- rep(NA, 5)
+  
+  for (k in 1:5) {
+    mask <- is.finite(dsn.all.est[[j]][, k])
+    if (length(dsn.all.est[[j]][, k][mask]) > 0) {
+      tmp <- tryCatch( {rma(yi=dsn.all.est[[j]][, k][mask], sei=dsn.all.se[[j]][, k][mask], method="REML")}, error=function(e) {})
+      
+      if (!is.null(tmp)) {
+        test_beta[k] <- tmp$beta
+        test_se[k] <- tmp$se
+        test_pval[k] <- tmp$pval
+      }
+    }
+  }
+  dsn.all.meta.beta <- rbind(dsn.all.meta.beta, test_beta)
+  dsn.all.meta.se <- rbind(dsn.all.meta.se, test_se)
+  dsn.all.meta.pval <- rbind(dsn.all.meta.pval, test_pval)
+  
+  rownames(dsn.all.meta.beta)[nrow(dsn.all.meta.beta)] <- j
+  rownames(dsn.all.meta.se)[nrow(dsn.all.meta.se)] <- j
+  rownames(dsn.all.meta.pval)[nrow(dsn.all.meta.pval)] <- j
+}
+
+colnames(dsn.all.meta.beta) <- paste0("Z", 1:5)
+colnames(dsn.all.meta.se) <- paste0("Z", 1:5)
+colnames(dsn.all.meta.pval) <- paste0("Z", 1:5)
+
+dsn.all.meta.pval <- apply(dsn.all.meta.pval, 2, function(x) { p.adjust(x, method="BY") })
+dsn.all.meta.pval <- apply(dsn.all.meta.pval, 2, function(x) { ifelse(is.finite(x) & x < 0.05, x, 1) })
+```
+
+```{r}
+mask <- apply(dsn.all.meta.pval, 2, function(x) { ifelse(x < 0.05, 1, 0) })
+mask.sig <- ifelse(apply(mask, 1, sum) > 2, 1, 0)
+
+rle(head(dsn.all.meta.pval[4, ]))
+```
+
+```{r}
+# OLD
+# surv.all.raw.spline <- xwas(design=dsn.all, linear=FALSE, adjfor=adjustfor)
+# cohort analysis - looping through each study year
+AvailableSeries <- names(table( MainTable.cleaned$SDDSRVYR ))
 for (i in 1:length(AvailableSeries)) {
   #eval(parse(text=paste0("MainTable.", "2")))
   cat("Now analyzing", useTheseSeries[i], "series.\n")
@@ -690,7 +858,7 @@ for (i in 1:length(AvailableSeries)) {
   assign( paste0("dsn.pir.below.", i),  subset(dsn.pir.below,  SDDSRVYR == AvailableSeries[i]))
   assign( paste0("dsn.age.above.", i),  subset(dsn.age.above,  SDDSRVYR == AvailableSeries[i]))
   assign( paste0("dsn.age.below.", i),  subset(dsn.age.below,  SDDSRVYR == AvailableSeries[i]))
-  assign( paste0("dsn.race.latin.", i), subset(dsn.race.latin, SDDSRVYR == AvailableSeries[i]))
+  assign( paste0("dsn.race.mexam.", i), subset(dsn.race.mexam, SDDSRVYR == AvailableSeries[i]))
   assign( paste0("dsn.race.white.", i), subset(dsn.race.white, SDDSRVYR == AvailableSeries[i]))
   assign( paste0("dsn.race.black.", i), subset(dsn.race.black, SDDSRVYR == AvailableSeries[i]))
   
@@ -706,7 +874,7 @@ for (i in 1:length(AvailableSeries)) {
   assign( paste0("surv.race.white.raw.", i), xwas(design=eval(parse(text=paste0("dsn.race.white.", i))), adjfor=adjustfor[adjustfor != "RIDRETH1"]) )
   assign( paste0("surv.race.black.raw.", i), xwas(design=eval(parse(text=paste0("dsn.race.black.", i))), adjfor=adjustfor[adjustfor != "RIDRETH1"]) )
   
-  assign( paste0("surv.all.coef.", i), lapply(eval(parse(text=paste0("surv.all.raw.", i))), function(x) { coef(summary(x)) }) ) # list of df
+  assign( paste0("surv.all.coef.", i), lapply(eval(parse(text=paste0("surv.all.raw.", i))), function(x) { tryCatch({ coef(summary(x)) }, error=function(e){}) }) ) # list of df
   assign( paste0("surv.m.coef.", i),   lapply(eval(parse(text=paste0("surv.m.raw.", i))), function(x) { coef(summary(x)) }) ) # list of df
   assign( paste0("surv.f.coef.", i),   lapply(eval(parse(text=paste0("surv.f.raw.", i))), function(x) { coef(summary(x)) }) ) # list of df
   assign( paste0("surv.pir.above.coef.", i),  lapply(eval(parse(text=paste0("surv.pir.above.raw.", i))),  function(x) { coef(summary(x)) }) ) # list of df
