@@ -838,227 +838,32 @@ dsn.all.meta.pval <- apply(dsn.all.meta.pval, 2, function(x) { ifelse(is.finite(
 mask <- apply(dsn.all.meta.pval, 2, function(x) { ifelse(x < 0.05, 1, 0) })
 mask.sig <- ifelse(apply(mask, 1, sum) > 2, 1, 0)
 
-rle(head(dsn.all.meta.pval[4, ]))
+mask[which(mask.sig == 1), ]
+dsn.all.meta.sig <- mask[apply(mask, 1, sum) > 2, ]
 ```
 
 ```{r}
-# OLD
-# surv.all.raw.spline <- xwas(design=dsn.all, linear=FALSE, adjfor=adjustfor)
-# cohort analysis - looping through each study year
-AvailableSeries <- names(table( MainTable.cleaned$SDDSRVYR ))
-for (i in 1:length(AvailableSeries)) {
-  #eval(parse(text=paste0("MainTable.", "2")))
-  cat("Now analyzing", useTheseSeries[i], "series.\n")
+for (i in rownames(dsn.all.meta.sig)) {
+  png(paste0("~/src/phenome-mortality/plot/sig-all-", i, ".png"))
   
-  # subset each substratified dsn survey further by year
-  assign( paste0("dsn.all.", i),        subset(dsn.all,        SDDSRVYR == AvailableSeries[i]))
-  assign( paste0("dsn.m.", i),          subset(dsn.m,          SDDSRVYR == AvailableSeries[i]))
-  assign( paste0("dsn.f.", i),          subset(dsn.f,          SDDSRVYR == AvailableSeries[i]))
-  assign( paste0("dsn.pir.above.", i),  subset(dsn.pir.above,  SDDSRVYR == AvailableSeries[i]))
-  assign( paste0("dsn.pir.below.", i),  subset(dsn.pir.below,  SDDSRVYR == AvailableSeries[i]))
-  assign( paste0("dsn.age.above.", i),  subset(dsn.age.above,  SDDSRVYR == AvailableSeries[i]))
-  assign( paste0("dsn.age.below.", i),  subset(dsn.age.below,  SDDSRVYR == AvailableSeries[i]))
-  assign( paste0("dsn.race.mexam.", i), subset(dsn.race.mexam, SDDSRVYR == AvailableSeries[i]))
-  assign( paste0("dsn.race.white.", i), subset(dsn.race.white, SDDSRVYR == AvailableSeries[i]))
-  assign( paste0("dsn.race.black.", i), subset(dsn.race.black, SDDSRVYR == AvailableSeries[i]))
+  plot(-2:2, t(exp(dsn.all.meta.beta[i, ])), 
+       type="l", 
+       main=paste0(VarDescription[VarDescription$var==i,][1, "tab_desc"], " (", i, ")"), 
+       xlab="SD",
+       ylab="Hazard Ratio (HR)",
+       ylim=c(0, 3),
+       col="red",
+       frame.plot=F)
   
-  # survival analysis
-  assign( paste0("surv.all.raw.", i), xwas(design=eval(parse(text=paste0("dsn.all.", i))), adjfor=adjustfor) ) 
-  assign( paste0("surv.m.raw.", i),   xwas(design=eval(parse(text=paste0("dsn.m.", i))),   adjfor=adjustfor[adjustfor != "RIAGENDR"]) )
-  assign( paste0("surv.f.raw.", i),   xwas(design=eval(parse(text=paste0("dsn.f.", i))),   adjfor=adjustfor[adjustfor != "RIAGENDR"]) )
-  assign( paste0("surv.pir.above.raw.", i),  xwas(design=eval(parse(text=paste0("dsn.pir.above.", i))),  adjfor=adjustfor[adjustfor != "INDFMPIR"]) )
-  assign( paste0("surv.pir.below.raw.", i),  xwas(design=eval(parse(text=paste0("dsn.pir.below.", i))),  adjfor=adjustfor[adjustfor != "INDFMPIR"]) )
-  assign( paste0("surv.age.above.raw.", i),  xwas(design=eval(parse(text=paste0("dsn.age.above.", i))),  adjfor=adjustfor[!(adjustfor %in% c("RIDAGEYR", "RIDAGEYR2"))]) )
-  assign( paste0("surv.age.below.raw.", i),  xwas(design=eval(parse(text=paste0("dsn.age.below.", i))),  adjfor=adjustfor[!(adjustfor %in% c("RIDAGEYR", "RIDAGEYR2"))]) )
-  assign( paste0("surv.race.latin.raw.", i), xwas(design=eval(parse(text=paste0("dsn.race.latin.", i))), adjfor=adjustfor[adjustfor != "RIDRETH1"]) )
-  assign( paste0("surv.race.white.raw.", i), xwas(design=eval(parse(text=paste0("dsn.race.white.", i))), adjfor=adjustfor[adjustfor != "RIDRETH1"]) )
-  assign( paste0("surv.race.black.raw.", i), xwas(design=eval(parse(text=paste0("dsn.race.black.", i))), adjfor=adjustfor[adjustfor != "RIDRETH1"]) )
+  for (j in 1:nrow(dsn.all.est[[i]])) {
+    lines(-2:2, exp(dsn.all.est[[i]][j, ]), col=rgb(0,0,0,0.2))
+  }
   
-  assign( paste0("surv.all.coef.", i), lapply(eval(parse(text=paste0("surv.all.raw.", i))), function(x) { tryCatch({ coef(summary(x)) }, error=function(e){}) }) ) # list of df
-  assign( paste0("surv.m.coef.", i),   lapply(eval(parse(text=paste0("surv.m.raw.", i))), function(x) { coef(summary(x)) }) ) # list of df
-  assign( paste0("surv.f.coef.", i),   lapply(eval(parse(text=paste0("surv.f.raw.", i))), function(x) { coef(summary(x)) }) ) # list of df
-  assign( paste0("surv.pir.above.coef.", i),  lapply(eval(parse(text=paste0("surv.pir.above.raw.", i))),  function(x) { coef(summary(x)) }) ) # list of df
-  assign( paste0("surv.pir.below.coef.", i),  lapply(eval(parse(text=paste0("surv.pir.below.raw.", i))),  function(x) { coef(summary(x)) }) ) # list of df
-  assign( paste0("surv.age.above.coef.", i),  lapply(eval(parse(text=paste0("surv.age.above.raw.", i))),  function(x) { coef(summary(x)) }) ) # list of df
-  assign( paste0("surv.age.below.coef.", i),  lapply(eval(parse(text=paste0("surv.age.below.raw.", i))),  function(x) { coef(summary(x)) }) ) # list of df
-  assign( paste0("surv.race.latin.coef.", i), lapply(eval(parse(text=paste0("surv.race.latin.raw.", i))), function(x) { coef(summary(x)) }) ) # list of df
-  assign( paste0("surv.race.white.coef.", i), lapply(eval(parse(text=paste0("surv.race.white.raw.", i))), function(x) { coef(summary(x)) }) ) # list of df
-  assign( paste0("surv.race.black.coef.", i), lapply(eval(parse(text=paste0("surv.race.black.raw.", i))), function(x) { coef(summary(x)) }) ) # list of df
+  lines(-2:2, t(exp(dsn.all.meta.beta[i, ] + dsn.all.meta.se[i, ])), col=rgb(1,0,0,0.5), lty="dashed")
+  lines(-2:2, t(exp(dsn.all.meta.beta[i, ] - dsn.all.meta.se[i, ])), col=rgb(1,0,0,0.5), lty="dashed")
   
-  assign( paste0("surv.all.", i),        annotate(xwas2df(eval(parse(text=paste0("surv.all.coef.", i))))) )
-  assign( paste0("surv.m.", i),          annotate(xwas2df(eval(parse(text=paste0("surv.m.coef.", i))))) )
-  
-  ifelse(length(eval(parse(text=paste0("surv.f.coef.", i)))) > 0, 
-         assign( paste0("surv.f.", i), annotate(xwas2df(eval(parse(text=paste0("surv.f.coef.", i)))))), 
-         assign( paste0("surv.f.", i), list(NA)) )
-  
-  assign( paste0("surv.pir.above.", i),  annotate(xwas2df(eval(parse(text=paste0("surv.pir.above.coef.", i))))) )
-  assign( paste0("surv.pir.below.", i),  annotate(xwas2df(eval(parse(text=paste0("surv.pir.below.coef.", i))))) )
-  assign( paste0("surv.age.above.", i),  annotate(xwas2df(eval(parse(text=paste0("surv.age.above.coef.", i))))) )
-  assign( paste0("surv.age.below.", i),  annotate(xwas2df(eval(parse(text=paste0("surv.age.below.coef.", i))))) )
-  assign( paste0("surv.race.latin.", i), annotate(xwas2df(eval(parse(text=paste0("surv.race.latin.coef.", i))))) )
-
-  ifelse(length(eval(parse(text=paste0("surv.race.white.coef.", i)))) > 0, 
-         assign( paste0("surv.race.white.", i), annotate(xwas2df(eval(parse(text=paste0("surv.race.white.coef.", i)))))), 
-         assign( paste0("surv.race.white.", i), list(NA)) )
-  
-  assign( paste0("surv.race.black.", i), annotate(xwas2df(eval(parse(text=paste0("surv.race.black.coef.", i))))) )
+  dev.off()
 }
-```
-
-Do `metafor` analysis but first create some wrapper functions to process each substratified analysis.
-
-```{r}
-xmeta <- function(x) {
-  #print(x)
-  tmp <- c()
-  for (i in 1:6) {
-    tmp <- c(tmp, eval(parse(text=paste0(x, i)))$var)
-  }
-  meta.beta <- data.frame(var=unique(tmp))
-  meta.se <- data.frame(var=unique(tmp))
-
-  MissingSeries <- c()
-  for (i in 1:6) {
-    if ( length(eval(parse(text=paste0(x, i)))) == 8 ) {
-      suppressWarnings( meta.beta <- merge(meta.beta, eval(parse(text=paste0(x, i)))[, c("beta", "var")], by="var", all.x=T) )
-      suppressWarnings( meta.se <- merge(meta.se, eval(parse(text=paste0(x, i)))[, c("se", "var")], by="var", all.x=T) )
-    } else {
-      MissingSeries <- c(MissingSeries, i)
-    }
-  }
-  
-  if (length(MissingSeries) > 0) {
-    ActualAvailableSeries <- AvailableSeries[AvailableSeries != AvailableSeries[MissingSeries]]
-  } else {
-    ActualAvailableSeries <- AvailableSeries
-  }
-  
-  rownames(meta.beta) <- meta.beta$var
-  rownames(meta.se) <- meta.se$var
-
-  meta.beta$var <- NULL
-  meta.se$var <- NULL
-  
-  colnames(meta.beta) <- c(ActualAvailableSeries)
-  colnames(meta.se) <- c(ActualAvailableSeries)
-
-  meta.all <- list() # stores all the meta analysis results
-  meta.var <- rownames(meta.beta)[apply(meta.beta, 1, function(x) { table(complete.cases(x))["TRUE"] }) >= 2] # list of lab values that are significant in at least 2 cohorts
-
-  for (i in meta.var) {
-    #print(i)
-    use <- complete.cases(t(meta.beta[i, ]))
-    while ( is.null(meta.all[[i]]) ) {
-      meta.all[[i]] <- tryCatch( {rma(yi=as.numeric(meta.beta[i, use]), sei=as.numeric(meta.se[i, use]), method="REML", slab=ActualAvailableSeries[use])}, error=function(e) {})
-      
-      if (table(use)["TRUE"] > 0) {
-        use[which(as.numeric(meta.se[i, ]) == max(meta.se[i, use], na.rm=T))] <- FALSE
-      } else {
-        break
-      }
-    }
-  }
-
-  return(meta.all)
-}
-
-xmeta2df <- function(x) {
-  meta.final <- c()
-  
-  for (i in x) {
-    ### metafor extraction
-    # overall effect, lower CI 95%, upper CI 95%, p-value, tau2, I2, k
-    meta.final <- rbind(meta.final, c(i$b, i$ci.lb, i$ci.ub, i$pval, i$I2, i$k))
-  }
-  rownames(meta.final) <- names(x)
-  colnames(meta.final) <- c("Effect", "Lower", "Upper", "p", "I2", "k") # label metafor analysis
-  
-  meta.final[, c("Effect")] <- exp(meta.final[, c("Effect")]) # convert beta coefficients to OR
-  meta.final[, c("Lower")] <- exp(meta.final[, c("Lower")]) # convert lower beta estimate to OR
-  meta.final[, c("Upper")] <- exp(meta.final[, c("Upper")]) # convert upper beta estimate to OR
-  
-  meta.final <- signif(meta.final, digits=3) # make values 3 significant figures
-  
-  meta.final <- merge(meta.final, VarDescription[match(unique(VarDescription$var), VarDescription$var), c("var", "var_desc")], by.x="row.names", by.y="var")
-  rownames(meta.final) <- meta.final$Row.names
-  meta.final$Row.names <- NULL
-  
-  meta.final$CI <- paste(meta.final$Lower, meta.final$Upper, sep=", ")
-  
-  Surveys <- as.data.frame(apply(VarSurveyCounts, 1, sum))
-  names(Surveys) <- "Surveys"
-  meta.final <- merge(meta.final, Surveys, by="row.names", all.x=T)
-  rownames(meta.final) <- meta.final$Row.names
-  meta.final$Row.names <- NULL
-  meta.final <- meta.final[order(meta.final$Effect), ] # increasing OR
-  
-  return(meta.final[, c("var_desc", "Effect", "CI", "p", "I2", "k", "Surveys")]) # reorder df as it's returned
-}
-```
-
-Now loop through each substratified analysis to do the meta-analysis.
-
-```{r}
-# x <- "surv.all.sig."
-surv.all.meta.raw <- xmeta("surv.all.") # used to be surv.all.sig.
-surv.all.meta     <- xmeta2df(surv.all.meta.raw)
-surv.all.meta$q   <- p.adjust(surv.all.meta$p, method="BY")
-surv.all.meta.sig <- subset(surv.all.meta, q < 0.05)
-
-surv.m.meta.raw <- xmeta("surv.m.")
-surv.m.meta     <- xmeta2df(surv.m.meta.raw)
-surv.m.meta$q   <- p.adjust(surv.m.meta$p, method="BY")
-surv.m.meta.sig <- subset(surv.m.meta, q < 0.05)
-surv.f.meta.raw <- xmeta("surv.f.")
-surv.f.meta     <- xmeta2df(surv.f.meta.raw)
-surv.f.meta$q   <- p.adjust(surv.f.meta$p, method="BY")
-surv.f.meta.sig <- subset(surv.f.meta, q < 0.05)
-
-#View(surv.m.meta.sig[!(row.names(surv.m.meta.sig) %in% row.names(surv.f.meta.sig)), ]) # vars UNIQUE to men
-#View(surv.f.meta.sig[!(row.names(surv.f.meta.sig) %in% row.names(surv.m.meta.sig)), ]) # vars UNIQUE to women
-
-surv.age.above.meta.raw <- xmeta("surv.age.above.")
-surv.age.above.meta     <- xmeta2df(surv.age.above.meta.raw)
-surv.age.above.meta$q   <- p.adjust(surv.age.above.meta$p, method="BY")
-surv.age.above.meta.sig <- subset(surv.age.above.meta, q < 0.05)
-surv.age.below.meta.raw <- xmeta("surv.age.below.")
-surv.age.below.meta     <- xmeta2df(surv.age.below.meta.raw)
-surv.age.below.meta$q   <- p.adjust(surv.age.below.meta$p, method="BY")
-surv.age.below.meta.sig <- subset(surv.age.below.meta, q < 0.05)
-
-#View(surv.age.above.meta.sig[!(row.names(surv.age.above.meta.sig) %in% row.names(surv.age.below.meta.sig)), ]) # vars UNIQUE to old
-#View(surv.age.below.meta.sig[!(row.names(surv.age.below.meta.sig) %in% row.names(surv.age.above.meta.sig)), ]) # vars UNIQUE to young
-
-surv.pir.above.meta.raw <- xmeta("surv.pir.above.")
-surv.pir.above.meta     <- xmeta2df(surv.pir.above.meta.raw)
-surv.pir.above.meta$q   <- p.adjust(surv.pir.above.meta$p, method="BY")
-surv.pir.above.meta     <- subset(surv.pir.above.meta, q < 0.05)
-surv.pir.above.meta.sig <- subset(surv.pir.above.meta, q < 0.05)
-surv.pir.below.meta.raw <- xmeta("surv.pir.below.")
-surv.pir.below.meta     <- xmeta2df(surv.pir.below.meta.raw)
-surv.pir.below.meta$q   <- p.adjust(surv.pir.below.meta$p, method="BY")
-surv.pir.below.meta.sig <- subset(surv.pir.below.meta, q < 0.05)
-
-#View(surv.pir.above.meta.sig[!(row.names(surv.pir.above.meta.sig) %in% row.names(surv.pir.below.meta.sig)), ]) # vars UNIQUE to rich
-#View(surv.pir.below.meta.sig[!(row.names(surv.pir.below.meta.sig) %in% row.names(surv.pir.above.meta.sig)), ]) # vars UNIQUE to poor
-
-surv.race.white.meta.raw <- xmeta("surv.race.white.")
-surv.race.white.meta     <- xmeta2df(surv.race.white.meta.raw)
-surv.race.white.meta$q   <- p.adjust(surv.race.white.meta$p, method="BY")
-surv.race.white.meta.sig <- subset(surv.race.white.meta, q < 0.05)
-surv.race.black.meta.raw <- xmeta("surv.race.black.")
-surv.race.black.meta     <- xmeta2df(surv.race.black.meta.raw)
-surv.race.black.meta$q   <- p.adjust(surv.race.black.meta$p, method="BY")
-surv.race.black.meta.sig <- subset(surv.race.black.meta, q < 0.05)
-surv.race.latin.meta.raw <- xmeta("surv.race.latin.")
-surv.race.latin.meta     <- xmeta2df(surv.race.latin.meta.raw)
-surv.race.latin.meta$q   <- p.adjust(surv.race.latin.meta$p, method="BY")
-surv.race.latin.meta.sig <- subset(surv.race.latin.meta, q < 0.05)
-
-#View(surv.race.white.meta.sig[!(row.names(surv.race.white.meta.sig) %in% c(row.names(surv.race.black.meta.sig), row.names(surv.race.latin.meta.sig))), ]) # vars UNIQUE to white
-#View(surv.race.black.meta.sig[!(row.names(surv.race.black.meta.sig) %in% c(row.names(surv.race.white.meta.sig), row.names(surv.race.latin.meta.sig))), ]) # vars UNIQUE to black
-#View(surv.race.latin.meta.sig[!(row.names(surv.race.latin.meta.sig) %in% c(row.names(surv.race.white.meta.sig), row.names(surv.race.black.meta.sig))), ]) # vars UNIQUE to latin
 ```
 
 Collate case analyses, run each line separately as appropriate.
